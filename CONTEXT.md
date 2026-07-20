@@ -4,11 +4,13 @@
 
 Build and maintain a reproducible benchmark application that compares SolidJS and React performance for deeply nested UI updates.
 
-## AI Agent and Model
+## AI Assistance
 
-- Agent: GitHub Copilot (VS Code coding agent)
-- Model: GPT-5.3-Codex
-- Environment: Windows, local workspace at C:/project
+- Edits and suggestions have been assisted by an automated coding agent; all changes are reviewed by project maintainers.
+
+## Environment Note
+
+- This repository is developed and tested on developer machines; do not rely on recorded local paths or environment-specific details in this file.
 
 ## Important Prompts Log
 

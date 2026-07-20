@@ -39,14 +39,20 @@ Each full matrix run should use the same options for all entries.
 
 ## 3. Run Counts and Warmup
 
-Recommended for thesis runs:
+Recommended defaults (matches UI automation defaults):
 
-- Suite runs: 30
-- Warmup runs excluded from analysis: first 5 suite runs
-- Aggregation target: median across kept runs
-- Variability reporting: interquartile range (IQR)
+- Per-run warmup iterations (in-app `Warmup`): 5
+- Per-run measured iterations (in-app `Iterations`): 30
+- Suite runs (independent repeats): 5
 
-The in-app warmupIterations are per-operation warmups. Keep this value constant for all matrix entries.
+Notes:
+- The in-app `Warmup` value is a per-operation warmup count and should be kept constant across matrix entries.
+
+Thesis / publication-grade protocol (optional, longer):
+
+- Suite runs: 30 independent repeats. Treat the first 5 suite runs as warmup and exclude them from analysis.
+- Aggregation target: median across kept runs.
+- Variability reporting: interquartile range (IQR) and between-run confidence intervals (95% CI / bootstrap where appropriate).
 
 ## 4. Environment Control
 
