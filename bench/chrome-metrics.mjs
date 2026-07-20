@@ -243,6 +243,27 @@ try {
       for (const scenario of scenarios) {
         const label = `${framework}-${variant}-${scenario}`;
 
+        // Two-pass approach:
+        // 1) Run the benchmark without capture to collect unbiased primary timings.
+        const primaryBenchmark = await page.evaluate(
+          async (payload) => {
+            const api = window.__nestedUiBenchmark;
+            if (!api) {
+              throw new Error("Automation API was not found in page context.");
+            }
+
+            return api.runCondition({ ...payload, captureMetrics: false });
+          },
+          {
+            framework,
+            variant,
+            scenario,
+            options: benchmarkOptions,
+            suiteRuns,
+          },
+        );
+
+        // 2) Run the benchmark with capture + tracing to collect CPU/render/memory.
         await page.tracing.start({
           categories: [
             "devtools.timeline",
@@ -256,14 +277,14 @@ try {
         const beforeMetrics = await cdp.send("Performance.getMetrics");
         const wallStart = performance.now();
 
-        const benchmark = await page.evaluate(
+        const captureBenchmark = await page.evaluate(
           async (payload) => {
             const api = window.__nestedUiBenchmark;
             if (!api) {
               throw new Error("Automation API was not found in page context.");
             }
 
-            return api.runCondition(payload);
+            return api.runCondition({ ...payload, captureMetrics: true });
           },
           {
             framework,
@@ -273,6 +294,7 @@ try {
             suiteRuns,
           },
         );
+
         const wallEnd = performance.now();
 
         const afterMetrics = await cdp.send("Performance.getMetrics");
@@ -318,20 +340,25 @@ try {
         // Values can exceed 100 due to tracing/CDP overhead and scheduling effects.
         const cpuUsagePercent = (taskDurationMs / wallDurationMs) * 100;
 
+        // Use primaryBenchmark.aggregate for unbiased primary metrics,
+        // and augment with trace/CDP-derived secondary metrics from the
+        // captureBenchmark + trace summary.
         const appAggregate = {
-          ...benchmark.aggregate,
+          ...primaryBenchmark.aggregate,
           cpuUsagePercent,
           renderingTimeMs: traceSummary.combinedRenderingMs,
           memoryUsageMb: jsHeapUsedMb,
         };
 
-        const appRuns = benchmark.runs.map((run) => ({
+        const appRuns = primaryBenchmark.runs.map((run, idx) => ({
           ...run,
+          // Use per-run memory when available from the capture pass; fall back to CDP value.
           cpuUsagePercent,
           renderingTimeMs: traceSummary.combinedRenderingMs,
           memoryUsageMb:
-            typeof run.memoryUsageMb === "number"
-              ? run.memoryUsageMb
+            captureBenchmark.runs[idx] &&
+            typeof captureBenchmark.runs[idx].memoryUsageMb === "number"
+              ? captureBenchmark.runs[idx].memoryUsageMb
               : jsHeapUsedMb,
         }));
 

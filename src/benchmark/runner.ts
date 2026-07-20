@@ -29,6 +29,7 @@ export interface BenchmarkAdapter {
 export interface BenchmarkRuntimeOptions {
   visualMode?: boolean;
   visualHostParent?: HTMLElement;
+  captureMetrics?: boolean;
 }
 
 const defaultOptions: BenchmarkOptions = {
@@ -170,12 +171,18 @@ function percentile(values: number[], rank: number): number {
   return sorted[index];
 }
 
-function runScenario(
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+async function runScenario(
   adapter: BenchmarkAdapter,
   scenarioKey: BenchmarkScenarioKey,
   options: BenchmarkOptions,
   runtimeOptions: BenchmarkRuntimeOptions,
-): BenchmarkResult {
+): Promise<BenchmarkResult> {
   const definition = scenarioDefinitions[scenarioKey];
   const scenarioDepth = definition.depth(options);
   const scenarioBreadth = definition.breadth(options);
@@ -188,9 +195,12 @@ function runScenario(
   host.dataset.framework = adapter.framework;
   host.dataset.scenario = scenarioKey;
 
+  const shouldKeepPreview = Boolean(
+    runtimeOptions.visualMode && runtimeOptions.visualHostParent,
+  );
   const hostParent = runtimeOptions.visualHostParent ?? document.body;
-  if (runtimeOptions.visualMode && runtimeOptions.visualHostParent) {
-    runtimeOptions.visualHostParent.innerHTML = "";
+  if (shouldKeepPreview) {
+    runtimeOptions.visualHostParent!.innerHTML = "";
   }
   hostParent.append(host);
 
@@ -203,12 +213,39 @@ function runScenario(
   }
 
   const iterationDurations: number[] = [];
+  const taskDurations: number[] = [];
+  const renderDurations: number[] = [];
+  const memorySamples: number[] = [];
+  const shouldCaptureMetrics = Boolean(runtimeOptions.captureMetrics);
+  const memorySupported =
+    typeof performance !== "undefined" &&
+    "memory" in performance &&
+    typeof (
+      performance as Performance & { memory?: { usedJSHeapSize?: number } }
+    ).memory?.usedJSHeapSize === "number";
 
   for (let i = options.warmupIterations; i < schedule.length; i += 1) {
     const start = performance.now();
     mounted.apply(schedule[i]);
-    const end = performance.now();
-    iterationDurations.push(end - start);
+    const applyEnd = performance.now();
+    iterationDurations.push(applyEnd - start);
+    taskDurations.push(applyEnd - start);
+
+    if (shouldCaptureMetrics) {
+      await nextFrame();
+      const frameEnd = performance.now();
+      renderDurations.push(frameEnd - applyEnd);
+      if (memorySupported) {
+        memorySamples.push(
+          (
+            performance as Performance & {
+              memory?: { usedJSHeapSize?: number };
+            }
+          ).memory!.usedJSHeapSize! /
+            (1024 * 1024),
+        );
+      }
+    }
   }
 
   const totalMs = iterationDurations.reduce((sum, value) => sum + value, 0);
@@ -219,24 +256,34 @@ function runScenario(
   const iqrMs = q3Ms - q1Ms;
   const p95Ms = percentile(iterationDurations, 0.95);
   const opsPerSecond = meanMs > 0 ? 1000 / meanMs : 0;
-  const memoryUsageMb =
-    typeof performance !== "undefined" &&
-    "memory" in performance &&
-    typeof (
-      performance as Performance & {
-        memory?: { usedJSHeapSize?: number };
-      }
-    ).memory?.usedJSHeapSize === "number"
-      ? (
-          performance as Performance & {
-            memory?: { usedJSHeapSize?: number };
-          }
-        ).memory!.usedJSHeapSize! /
-        (1024 * 1024)
+
+  const averageMemoryMb =
+    memorySamples.length > 0
+      ? memorySamples.reduce((sum, value) => sum + value, 0) /
+        memorySamples.length
       : null;
 
-  mounted.dispose();
-  host.remove();
+  const averageRenderMs =
+    renderDurations.length > 0
+      ? renderDurations.reduce((sum, value) => sum + value, 0) /
+        renderDurations.length
+      : null;
+
+  const averageTaskMs =
+    taskDurations.length > 0
+      ? taskDurations.reduce((sum, value) => sum + value, 0) /
+        taskDurations.length
+      : null;
+
+  const cpuUsagePercent =
+    averageTaskMs !== null && averageRenderMs !== null
+      ? (averageTaskMs / (averageTaskMs + averageRenderMs)) * 100
+      : null;
+
+  if (!shouldKeepPreview) {
+    mounted.dispose();
+    host.remove();
+  }
 
   return {
     framework: adapter.framework,
@@ -255,9 +302,9 @@ function runScenario(
     iqrMs,
     p95Ms,
     opsPerSecond,
-    cpuUsagePercent: null,
-    renderingTimeMs: null,
-    memoryUsageMb,
+    cpuUsagePercent,
+    renderingTimeMs: averageRenderMs,
+    memoryUsageMb: averageMemoryMb,
   };
 }
 
@@ -271,27 +318,31 @@ export function getNestedBenchmarkScenarios(): Array<{
   }));
 }
 
-export function runNestedResearchSuite(
+export async function runNestedResearchSuite(
   adapter: BenchmarkAdapter,
   options: Partial<BenchmarkOptions> = {},
   scenarios?: BenchmarkScenarioKey[],
   runtimeOptions: BenchmarkRuntimeOptions = {},
-): BenchmarkResult[] {
+): Promise<BenchmarkResult[]> {
   const resolved = { ...defaultOptions, ...options };
   const activeScenarios =
     scenarios ?? (Object.keys(scenarioDefinitions) as BenchmarkScenarioKey[]);
 
-  return activeScenarios.map((scenarioKey) =>
-    runScenario(adapter, scenarioKey, resolved, runtimeOptions),
-  );
+  const results: BenchmarkResult[] = [];
+  for (const scenarioKey of activeScenarios) {
+    results.push(
+      await runScenario(adapter, scenarioKey, resolved, runtimeOptions),
+    );
+  }
+  return results;
 }
 
-export function runNestedUpdateBenchmark(
+export async function runNestedUpdateBenchmark(
   adapter: BenchmarkAdapter,
   options: Partial<BenchmarkOptions> = {},
   runtimeOptions: BenchmarkRuntimeOptions = {},
-): BenchmarkResult {
-  const [result] = runNestedResearchSuite(
+): Promise<BenchmarkResult> {
+  const [result] = await runNestedResearchSuite(
     adapter,
     options,
     ["controlled-patterns"],

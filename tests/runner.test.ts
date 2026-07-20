@@ -25,8 +25,8 @@ describe("nested update benchmark runner", () => {
     ]);
   });
 
-  it("runs a single selected scenario for React", () => {
-    const results = runNestedResearchSuite(
+  it("runs a single selected scenario for React", async () => {
+    const results = await runNestedResearchSuite(
       {
         framework: "React",
         variant: "baseline",
@@ -48,8 +48,8 @@ describe("nested update benchmark runner", () => {
     expect(results[0].opsPerSecond).toBeGreaterThanOrEqual(0);
   });
 
-  it("produces metrics for React", () => {
-    const result = runNestedUpdateBenchmark(
+  it("produces metrics for React", async () => {
+    const result = await runNestedUpdateBenchmark(
       {
         framework: "React",
         variant: "baseline",
@@ -70,8 +70,8 @@ describe("nested update benchmark runner", () => {
     expect(result.opsPerSecond).toBeGreaterThanOrEqual(0);
   });
 
-  it("produces metrics for Solid", () => {
-    const result = runNestedUpdateBenchmark(
+  it("produces metrics for Solid", async () => {
+    const result = await runNestedUpdateBenchmark(
       {
         framework: "Solid",
         variant: "baseline",
@@ -92,8 +92,8 @@ describe("nested update benchmark runner", () => {
     expect(result.opsPerSecond).toBeGreaterThanOrEqual(0);
   });
 
-  it("produces metrics for optimized variants", () => {
-    const reactOptimized = runNestedUpdateBenchmark(
+  it("produces metrics for optimized variants", async () => {
+    const reactOptimized = await runNestedUpdateBenchmark(
       {
         framework: "React",
         variant: "optimized",
@@ -107,7 +107,7 @@ describe("nested update benchmark runner", () => {
       },
     );
 
-    const solidOptimized = runNestedUpdateBenchmark(
+    const solidOptimized = await runNestedUpdateBenchmark(
       {
         framework: "Solid",
         variant: "optimized",
@@ -125,5 +125,34 @@ describe("nested update benchmark runner", () => {
     expect(solidOptimized.variant).toBe("optimized");
     expect(reactOptimized.meanMs).toBeGreaterThanOrEqual(0);
     expect(solidOptimized.meanMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("keeps a visual preview host mounted when visual mode is enabled", async () => {
+    const previewHost = document.createElement("div");
+    document.body.appendChild(previewHost);
+
+    await runNestedUpdateBenchmark(
+      {
+        framework: "React",
+        variant: "baseline",
+        mount: mountReactTree,
+      },
+      {
+        depth: 2,
+        breadth: 1,
+        warmupIterations: 1,
+        iterations: 1,
+      },
+      {
+        visualMode: true,
+        visualHostParent: previewHost,
+      },
+    );
+
+    const mountedHost = previewHost.querySelector(".bench-host");
+    expect(mountedHost).not.toBeNull();
+    expect(mountedHost?.classList.contains("bench-host--visible")).toBe(true);
+
+    previewHost.remove();
   });
 });

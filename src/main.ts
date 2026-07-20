@@ -12,6 +12,7 @@ import {
   mountSolidTree,
   mountSolidTreeOptimized,
 } from "./frameworks/solidTree.solid";
+import { buildBenchmarkDownloadPayload } from "./benchmark/export";
 import type {
   BenchmarkOptions,
   BenchmarkResult,
@@ -26,6 +27,7 @@ interface AutomationConditionInput {
   scenario: BenchmarkScenarioKey;
   options: BenchmarkOptions;
   suiteRuns: number;
+  captureMetrics?: boolean;
 }
 
 interface AutomationApi {
@@ -62,13 +64,17 @@ app.innerHTML = `
       <div class="control-grid">
         <label>Depth <input id="depth" type="number" min="2" max="7" value="5" /></label>
         <label>Breadth <input id="breadth" type="number" min="2" max="5" value="3" /></label>
-        <label>Warmup <input id="warmup" type="number" min="0" max="300" value="60" /></label>
-        <label>Iterations <input id="iterations" type="number" min="10" max="1000" value="240" /></label>
+        <label>Warmup <input id="warmup" type="number" min="0" max="300" value="5" /></label>
+        <label>Iterations <input id="iterations" type="number" min="10" max="1000" value="30" /></label>
         <label>Suite Runs <input id="suiteRuns" type="number" min="1" max="20" value="5" /></label>
       </div>
       <label class="toggle-row">
-        <input id="visualMode" type="checkbox" />
+        <input id="visualMode" type="checkbox" checked />
         <span>Debug visual mode (shows live tree updates; not for fair timing comparisons)</span>
+      </label>
+      <label class="toggle-row">
+        <input id="captureMetrics" type="checkbox" checked />
+        <span>Capture secondary metrics (CPU / render / memory)</span>
       </label>
       <div class="actions">
         <button id="runSuite" class="run-button">Run Comparison</button>
@@ -95,6 +101,9 @@ app.innerHTML = `
             <th>Avg IQR (ms)</th>
             <th>Avg p95 (ms)</th>
             <th>Avg Ops/s</th>
+            <th>Avg CPU (%)</th>
+            <th>Avg Render (ms)</th>
+            <th>Avg Mem (MB)</th>
           </tr>
         </thead>
         <tbody id="resultsBody"></tbody>
@@ -146,6 +155,8 @@ const warmupEl = warmupInput;
 const iterationsEl = iterationsInput;
 const suiteRunsEl = suiteRunsInput;
 const visualModeEl = visualModeInput;
+const captureMetricsEl =
+  document.querySelector<HTMLInputElement>("#captureMetrics");
 const runSuiteBtn = runSuiteButton;
 const downloadResultsBtn = downloadResultsButton;
 const statusEl = status;
@@ -182,6 +193,18 @@ function aggregate(
       acc.iqrMs += item.iqrMs;
       acc.p95Ms += item.p95Ms;
       acc.opsPerSecond += item.opsPerSecond;
+      if (item.cpuUsagePercent !== null) {
+        acc.cpuUsagePercent += item.cpuUsagePercent;
+        acc.cpuCount += 1;
+      }
+      if (item.renderingTimeMs !== null) {
+        acc.renderingTimeMs += item.renderingTimeMs;
+        acc.renderingCount += 1;
+      }
+      if (item.memoryUsageMb !== null) {
+        acc.memoryUsageMb += item.memoryUsageMb;
+        acc.memoryCount += 1;
+      }
       return acc;
     },
     {
@@ -193,6 +216,12 @@ function aggregate(
       iqrMs: 0,
       p95Ms: 0,
       opsPerSecond: 0,
+      cpuUsagePercent: 0,
+      cpuCount: 0,
+      renderingTimeMs: 0,
+      renderingCount: 0,
+      memoryUsageMb: 0,
+      memoryCount: 0,
     },
   );
 
@@ -210,9 +239,14 @@ function aggregate(
     iqrMs: total.iqrMs / count,
     p95Ms: total.p95Ms / count,
     opsPerSecond: total.opsPerSecond / count,
-    cpuUsagePercent: null,
-    renderingTimeMs: null,
-    memoryUsageMb: null,
+    cpuUsagePercent:
+      total.cpuCount > 0 ? total.cpuUsagePercent / total.cpuCount : null,
+    renderingTimeMs:
+      total.renderingCount > 0
+        ? total.renderingTimeMs / total.renderingCount
+        : null,
+    memoryUsageMb:
+      total.memoryCount > 0 ? total.memoryUsageMb / total.memoryCount : null,
   };
 }
 
@@ -220,20 +254,12 @@ function formatResult(result: BenchmarkResult): string {
   return `${result.scenario.padEnd(30)} | ${result.framework.padEnd(5)} | ${result.variant.padEnd(9)} | mean=${result.meanMs.toFixed(4)}ms | p95=${result.p95Ms.toFixed(4)}ms | ops/s=${result.opsPerSecond.toFixed(2)}`;
 }
 
+function formatOptionalMetric(value: number | null): string {
+  return value === null ? "n/a" : value.toFixed(4);
+}
+
 function downloadAggregates(results: BenchmarkResult[]): void {
-  const payload = {
-    generatedAt: new Date().toISOString(),
-    scenarioCount: results.length,
-    metricCoverage: {
-      updateLatency: "captured",
-      throughput: "captured",
-      iqr: "captured",
-      cpuUsage: "external-devtools-required",
-      renderingTime: "external-devtools-required",
-      memoryUsage: "captured-if-browser-supports-performance-memory",
-    },
-    results,
-  };
+  const payload = buildBenchmarkDownloadPayload(results);
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
@@ -296,13 +322,14 @@ async function runConditionForAutomation(
 ): Promise<{ aggregate: BenchmarkResult; runs: BenchmarkResult[] }> {
   const adapter = resolveAdapter(input.framework, input.variant);
   const runs: BenchmarkResult[] = [];
+  const capture = input.captureMetrics ?? true;
 
   for (let run = 0; run < input.suiteRuns; run += 1) {
-    const [result] = runNestedResearchSuite(
+    const [result] = await runNestedResearchSuite(
       adapter,
       input.options,
       [input.scenario],
-      { visualMode: false },
+      { visualMode: false, captureMetrics: capture },
     );
     if (result) {
       runs.push(result);
@@ -360,11 +387,9 @@ async function runSuite(): Promise<void> {
   const suiteRuns = parseInput(suiteRunsEl);
   const visualMode = visualModeEl.checked;
   const effectiveOptions = getEffectiveOptions(options, visualMode);
-  const effectiveSuiteRuns = visualMode ? Math.min(suiteRuns, 2) : suiteRuns;
+  const effectiveSuiteRuns = suiteRuns;
 
-  statusEl.textContent = visualMode
-    ? `Running ${effectiveSuiteRuns} visual suite iteration(s) with reduced workload...`
-    : `Running ${effectiveSuiteRuns} suite iterations...`;
+  statusEl.textContent = `Running ${effectiveSuiteRuns} ${visualMode ? "visual " : ""}suite iteration(s)...`;
 
   const scenarioKeys = getNestedBenchmarkScenarios().map(
     (scenario) => scenario.key,
@@ -393,13 +418,18 @@ async function runSuite(): Promise<void> {
       for (const adapter of adapterRegistry) {
         for (const scenarioKey of scenarioKeys) {
           statusEl.textContent = `Run ${run}/${effectiveSuiteRuns} - ${adapter.framework} ${adapter.variant} - ${scenarioKey}`;
-          const [result] = runNestedResearchSuite(
+          const [result] = await runNestedResearchSuite(
             adapter,
             effectiveOptions,
             [scenarioKey],
             {
               visualMode,
               visualHostParent: visualMode ? visualHostEl : undefined,
+              // Capture metrics when the UI option is enabled or when visual
+              // mode is active. Capturing every run by default made long
+              // suites wait on `requestAnimationFrame` per iteration and
+              // appeared to hang in test/dev runs.
+              captureMetrics: Boolean(captureMetricsEl?.checked) || visualMode,
             },
           );
 
@@ -451,7 +481,7 @@ async function runSuite(): Promise<void> {
   resultsBodyEl.innerHTML = aggregates
     .map(
       (result) =>
-        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${result.opsPerSecond.toFixed(2)}</td></tr>`,
+        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${result.opsPerSecond.toFixed(2)}</td><td>${formatOptionalMetric(result.cpuUsagePercent)}</td><td>${formatOptionalMetric(result.renderingTimeMs)}</td><td>${formatOptionalMetric(result.memoryUsageMb)}</td></tr>`,
     )
     .join("");
 
