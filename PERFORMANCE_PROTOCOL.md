@@ -9,23 +9,23 @@ Measure React and Solid performance for nested real-time updates across baseline
 Primary focus:
 
 - Update latency
-- CPU usage
+- Chrome DevTools Protocol `TaskDuration`
 
 Supporting focus:
 
-- Rendering time composition
+- Trace-event duration total
 - Memory trend during sustained updates
 
 Captured directly by app export:
 
-- Update latency distribution (including IQR)
-- Throughput (ops/s)
-- Optional memory snapshot when `performance.memory` is available
+- Raw update-latency records and their aggregate distribution (including IQR)
+- Throughput (ops/s) derived from mean measured latency
 
 Collected externally:
 
-- CPU usage (Chrome DevTools Performance)
-- Rendering-time composition (Chrome DevTools trace breakdown)
+- Condition-level CDP `TaskDuration` (Chrome DevTools Performance domain)
+- Trace-event duration total (Chrome DevTools trace)
+- Condition-level CDP JavaScript heap snapshots (`JSHeapUsedSize`, `JSHeapTotalSize`)
 
 ## 2. Test Matrix
 
@@ -39,20 +39,16 @@ Each full matrix run should use the same options for all entries.
 
 ## 3. Run Counts and Warmup
 
-Recommended defaults (matches UI automation defaults):
+Required configuration:
 
 - Per-run warmup iterations (in-app `Warmup`): 5
-- Per-run measured iterations (in-app `Iterations`): 30
-- Suite runs (independent repeats): 5
+- Per-run measured iterations (in-app `Iterations`): 25
+- Suite runs (independent repeats): 1
 
 Notes:
-- The in-app `Warmup` value is a per-operation warmup count and should be kept constant across matrix entries.
 
-Thesis / publication-grade protocol (optional, longer):
-
-- Suite runs: 30 independent repeats. Treat the first 5 suite runs as warmup and exclude them from analysis.
-- Aggregation target: median across kept runs.
-- Variability reporting: interquartile range (IQR) and between-run confidence intervals (95% CI / bootstrap where appropriate).
+- Each framework/variant/scenario condition therefore executes 30 operations: 5 warm-up operations excluded from analysis, followed by 25 measured operations.
+- Raw records retain both phases. Median, IQR, p95, and aggregate ops/s use only the 25 measured latencies.
 
 ## 4. Environment Control
 
@@ -74,51 +70,52 @@ Record these details in the thesis appendix.
 4. Keep visual mode off for fair timing.
 5. Run comparison.
 6. Export JSON.
-7. Repeat until target run count is reached.
+7. Preserve each independent export as a separate experiment run.
 
-## 6. CPU Measurement (Chrome DevTools)
+## 6. CDP TaskDuration Measurement
 
-For each framework-variant pair and scenario:
+The automated Chrome runner captures this condition-level metric for each framework, variant, and scenario:
 
-1. Open DevTools Performance panel.
-2. Start recording.
-3. Run one suite iteration focused on the target condition.
-4. Stop recording after completion.
-5. Capture CPU time summary from Main thread and scripting breakdown.
-6. Store trace filename with run metadata.
+1. Start the benchmark application.
+2. Run `npm run metrics:chrome`.
+3. Read the generated `chrome-metrics-report.json`.
+4. Retain optional trace files when `--saveTraces=true` is supplied.
 
-Notes:
+Definition:
 
-- DevTools introduces observer overhead.
-- Compare conditions only within the same profiling method.
-- Do not compare profiled and non-profiled runs directly.
+- `TaskDuration` is the CDP `Performance.getMetrics` cumulative task-duration value. The script records the before/after delta and converts seconds to milliseconds.
+- Its scope is one traced capture pass for a framework, variant, and scenario. It includes benchmark JavaScript and any `requestAnimationFrame` callbacks executed by that pass; it excludes idle wall-clock time.
+- It is not labelled as CPU usage, CPU utilisation, or a percentage.
+- Tracing and DevTools instrumentation introduce overhead. Compare only conditions captured with the same process.
 
-## 7. Memory Measurement
+## 7. Trace Event Duration Measurement
 
-Use one approach consistently:
+The automation records `traceRenderingAndPaintingDurationMs`: the sum of complete trace events (`ph = "X"`) for `Layout`, `RecalculateStyles`, `UpdateLayoutTree`, `UpdateLayerTree`, `CompositeLayers`, `Commit`, `Paint`, and `RasterTask`. Trace durations are converted from microseconds to milliseconds. This is a named trace-event total, not a CPU utilisation metric and not a complete browser rendering cost.
 
-- Preferred: DevTools Performance memory lane and heap trend.
-- Optional: Performance Memory API in Chrome (where available).
+## 8. Memory Measurement
 
-Collect memory under sustained updates (higher iterations) and report trend, not single snapshots.
+The automated Chrome report stores `JSHeapUsedSize` and `JSHeapTotalSize` as condition-level CDP snapshots after the measured capture pass. These are JavaScript heap snapshots, not total process or system memory. Interpret individual snapshots cautiously.
 
-## 8. Analysis Guidance
+## 9. Analysis Guidance
 
 For each metric:
 
 - Use median as primary estimator.
 - Report IQR for spread.
 - Include p95 latency from exported JSON.
+- Calculate p95 with nearest-rank: sort the 25 measured latencies and select index `ceil(0.95 * n) - 1`.
+- Calculate IQR as the nearest-rank 75th percentile minus the nearest-rank 25th percentile.
+- Calculate aggregate ops/s as `1000 / mean measured latency in milliseconds`.
 - Avoid single-score conclusions without scenario-level tables.
 
-## 9. Fairness Guardrails
+## 10. Fairness Guardrails
 
 - Keep scenario options identical across all matrix entries.
 - Do not change component hierarchy between framework variants.
 - Keep operation schedule deterministic.
 - Report all scenarios for each framework and variant.
 
-## 10. Suggested Improvements for Future Study
+## 11. Suggested Improvements for Future Study
 
 - Add automated CSV/JSON merge script for all run exports.
 - Add confidence intervals via bootstrap resampling.

@@ -31,11 +31,27 @@ export interface BenchmarkOptions {
   iterations: number;
 }
 
+export type BenchmarkMeasurementPhase = "warmup" | "measured";
+
+export interface BenchmarkMeasurement {
+  framework: FrameworkName;
+  variant: BenchmarkVariant;
+  scenario: BenchmarkScenarioKey;
+  iteration: number;
+  phase: BenchmarkMeasurementPhase;
+  timestamp: string;
+  options: BenchmarkOptions;
+  operationKind: BenchmarkOperationKind;
+  updateLatencyMs: number;
+  operationsPerSecond: number;
+}
+
 export interface BenchmarkResult {
   framework: FrameworkName;
   variant: BenchmarkVariant;
   scenario: BenchmarkScenarioKey;
   options: BenchmarkOptions;
+  measurements: BenchmarkMeasurement[];
   totalMs: number;
   meanMs: number;
   medianMs: number;
@@ -44,7 +60,4 @@ export interface BenchmarkResult {
   iqrMs: number;
   p95Ms: number;
   opsPerSecond: number;
-  cpuUsagePercent: number | null;
-  renderingTimeMs: number | null;
-  memoryUsageMb: number | null;
 }

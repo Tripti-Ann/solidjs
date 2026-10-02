@@ -14,6 +14,7 @@ import {
 } from "./frameworks/solidTree.solid";
 import { buildBenchmarkDownloadPayload } from "./benchmark/export";
 import type {
+  BenchmarkMeasurement,
   BenchmarkOptions,
   BenchmarkResult,
   BenchmarkScenarioKey,
@@ -28,6 +29,7 @@ interface AutomationConditionInput {
   options: BenchmarkOptions;
   suiteRuns: number;
   captureMetrics?: boolean;
+  pauseAtMeasurementBoundaries?: boolean;
 }
 
 interface AutomationApi {
@@ -36,6 +38,8 @@ interface AutomationApi {
     aggregate: BenchmarkResult;
     runs: BenchmarkResult[];
   }>;
+  boundaryPhase: "after-warmup" | "after-measured" | null;
+  resumeAtMeasurementBoundary(): void;
 }
 
 declare global {
@@ -65,16 +69,13 @@ app.innerHTML = `
         <label>Depth <input id="depth" type="number" min="2" max="7" value="5" /></label>
         <label>Breadth <input id="breadth" type="number" min="2" max="5" value="3" /></label>
         <label>Warmup <input id="warmup" type="number" min="0" max="300" value="5" /></label>
-        <label>Iterations <input id="iterations" type="number" min="10" max="1000" value="30" /></label>
-        <label>Suite Runs <input id="suiteRuns" type="number" min="1" max="20" value="5" /></label>
+        <label>Iterations <input id="iterations" type="number" min="10" max="1000" value="25" /></label>
+        <label>Suite Runs <input id="suiteRuns" type="number" min="1" max="20" value="1" /></label>
       </div>
+      <p class="protocol-summary">Thesis configuration: 5 warm-ups, 25 measured operations, 1 suite run.</p>
       <label class="toggle-row">
-        <input id="visualMode" type="checkbox" checked />
-        <span>Debug visual mode (shows live tree updates; not for fair timing comparisons)</span>
-      </label>
-      <label class="toggle-row">
-        <input id="captureMetrics" type="checkbox" checked />
-        <span>Capture secondary metrics (CPU / render / memory)</span>
+        <input id="visualMode" type="checkbox" />
+        <span>Debug visual mode</span>
       </label>
       <div class="actions">
         <button id="runSuite" class="run-button">Run Comparison</button>
@@ -83,31 +84,31 @@ app.innerHTML = `
       <p id="status" class="status">Idle</p>
     </section>
 
-    <section class="panel visual-panel">
+    <section id="visualPanel" class="panel visual-panel" hidden>
       <h2>Live Tree Preview</h2>
       <p class="visual-note">Enable debug visual mode to watch updates in-flight. The preview renders one scenario/framework run at a time.</p>
       <div id="visualHost" class="visual-host"></div>
     </section>
 
-    <section class="panel">
+    <section class="panel results-panel">
       <h2>Results</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Scenario</th>
-            <th>Framework</th>
-            <th>Variant</th>
-            <th>Avg Mean (ms)</th>
-            <th>Avg IQR (ms)</th>
-            <th>Avg p95 (ms)</th>
-            <th>Avg Ops/s</th>
-            <th>Avg CPU (%)</th>
-            <th>Avg Render (ms)</th>
-            <th>Avg Mem (MB)</th>
-          </tr>
-        </thead>
-        <tbody id="resultsBody"></tbody>
-      </table>
+      <p id="resultsSummary" class="results-summary">No results yet.</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Scenario</th>
+              <th>Framework</th>
+              <th>Variant</th>
+              <th>Mean (ms)</th>
+              <th>IQR (ms)</th>
+              <th>p95 (ms)</th>
+              <th>Ops/s</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
     </section>
 
     <section class="panel log-panel">
@@ -131,6 +132,9 @@ const resultsBody =
   document.querySelector<HTMLTableSectionElement>("#resultsBody");
 const runLog = document.querySelector<HTMLPreElement>("#runLog");
 const visualHost = document.querySelector<HTMLDivElement>("#visualHost");
+const visualPanel = document.querySelector<HTMLElement>("#visualPanel");
+const resultsSummary =
+  document.querySelector<HTMLParagraphElement>("#resultsSummary");
 
 if (
   !depthInput ||
@@ -144,7 +148,9 @@ if (
   !status ||
   !resultsBody ||
   !runLog ||
-  !visualHost
+  !visualHost ||
+  !visualPanel ||
+  !resultsSummary
 ) {
   throw new Error("Benchmark controls could not be initialized.");
 }
@@ -155,26 +161,47 @@ const warmupEl = warmupInput;
 const iterationsEl = iterationsInput;
 const suiteRunsEl = suiteRunsInput;
 const visualModeEl = visualModeInput;
-const captureMetricsEl =
-  document.querySelector<HTMLInputElement>("#captureMetrics");
 const runSuiteBtn = runSuiteButton;
 const downloadResultsBtn = downloadResultsButton;
 const statusEl = status;
 const resultsBodyEl = resultsBody;
 const runLogEl = runLog;
 const visualHostEl = visualHost;
+const visualPanelEl = visualPanel;
+const resultsSummaryEl = resultsSummary;
 let lastAggregates: BenchmarkResult[] = [];
-
-type BenchmarkAdapterWithVariant = BenchmarkAdapter;
+let lastRawMeasurements: BenchmarkMeasurement[] = [];
+let boundaryPhase: AutomationApi["boundaryPhase"] = null;
+let resumeAtMeasurementBoundary: (() => void) | undefined;
 
 function adapterKey(
-  entry: Pick<BenchmarkAdapterWithVariant, "framework" | "variant">,
+  entry: Pick<BenchmarkAdapter, "framework" | "variant">,
 ): `${FrameworkName}-${BenchmarkVariant}` {
   return `${entry.framework}-${entry.variant}`;
 }
 
 function parseInput(input: HTMLInputElement): number {
   return Number.parseInt(input.value, 10);
+}
+
+function usesThesisConfiguration(
+  options: BenchmarkOptions,
+  suiteRuns: number,
+  visualMode: boolean,
+): boolean {
+  return (
+    options.warmupIterations === 5 &&
+    options.iterations === 25 &&
+    suiteRuns === 1 &&
+    !visualMode
+  );
+}
+
+function updateVisualModeVisibility(): void {
+  visualPanelEl.hidden = !visualModeEl.checked;
+  if (!visualModeEl.checked) {
+    visualHostEl.innerHTML = "";
+  }
 }
 
 function aggregate(
@@ -193,18 +220,6 @@ function aggregate(
       acc.iqrMs += item.iqrMs;
       acc.p95Ms += item.p95Ms;
       acc.opsPerSecond += item.opsPerSecond;
-      if (item.cpuUsagePercent !== null) {
-        acc.cpuUsagePercent += item.cpuUsagePercent;
-        acc.cpuCount += 1;
-      }
-      if (item.renderingTimeMs !== null) {
-        acc.renderingTimeMs += item.renderingTimeMs;
-        acc.renderingCount += 1;
-      }
-      if (item.memoryUsageMb !== null) {
-        acc.memoryUsageMb += item.memoryUsageMb;
-        acc.memoryCount += 1;
-      }
       return acc;
     },
     {
@@ -216,12 +231,6 @@ function aggregate(
       iqrMs: 0,
       p95Ms: 0,
       opsPerSecond: 0,
-      cpuUsagePercent: 0,
-      cpuCount: 0,
-      renderingTimeMs: 0,
-      renderingCount: 0,
-      memoryUsageMb: 0,
-      memoryCount: 0,
     },
   );
 
@@ -239,14 +248,7 @@ function aggregate(
     iqrMs: total.iqrMs / count,
     p95Ms: total.p95Ms / count,
     opsPerSecond: total.opsPerSecond / count,
-    cpuUsagePercent:
-      total.cpuCount > 0 ? total.cpuUsagePercent / total.cpuCount : null,
-    renderingTimeMs:
-      total.renderingCount > 0
-        ? total.renderingTimeMs / total.renderingCount
-        : null,
-    memoryUsageMb:
-      total.memoryCount > 0 ? total.memoryUsageMb / total.memoryCount : null,
+    measurements: values.flatMap((item) => item.measurements),
   };
 }
 
@@ -254,12 +256,11 @@ function formatResult(result: BenchmarkResult): string {
   return `${result.scenario.padEnd(30)} | ${result.framework.padEnd(5)} | ${result.variant.padEnd(9)} | mean=${result.meanMs.toFixed(4)}ms | p95=${result.p95Ms.toFixed(4)}ms | ops/s=${result.opsPerSecond.toFixed(2)}`;
 }
 
-function formatOptionalMetric(value: number | null): string {
-  return value === null ? "n/a" : value.toFixed(4);
-}
-
-function downloadAggregates(results: BenchmarkResult[]): void {
-  const payload = buildBenchmarkDownloadPayload(results);
+function downloadAggregates(
+  results: BenchmarkResult[],
+  rawMeasurements: BenchmarkMeasurement[],
+): void {
+  const payload = buildBenchmarkDownloadPayload(results, rawMeasurements);
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
@@ -279,7 +280,24 @@ function nextFrame(): Promise<void> {
   });
 }
 
-const adapterRegistry: BenchmarkAdapterWithVariant[] = [
+function pauseAtMeasurementBoundary(
+  phase: Exclude<AutomationApi["boundaryPhase"], null>,
+): Promise<void> {
+  if (resumeAtMeasurementBoundary) {
+    throw new Error("A benchmark measurement boundary is already paused.");
+  }
+
+  boundaryPhase = phase;
+  return new Promise((resolve) => {
+    resumeAtMeasurementBoundary = () => {
+      resumeAtMeasurementBoundary = undefined;
+      boundaryPhase = null;
+      resolve();
+    };
+  });
+}
+
+const adapterRegistry: BenchmarkAdapter[] = [
   {
     framework: "React" as const,
     variant: "baseline" as const,
@@ -305,7 +323,7 @@ const adapterRegistry: BenchmarkAdapterWithVariant[] = [
 function resolveAdapter(
   framework: FrameworkName,
   variant: BenchmarkVariant,
-): BenchmarkAdapterWithVariant {
+): BenchmarkAdapter {
   const adapter = adapterRegistry.find(
     (entry) => entry.framework === framework && entry.variant === variant,
   );
@@ -324,12 +342,27 @@ async function runConditionForAutomation(
   const runs: BenchmarkResult[] = [];
   const capture = input.captureMetrics ?? true;
 
+  if (input.pauseAtMeasurementBoundaries && input.suiteRuns !== 1) {
+    throw new Error(
+      "Boundary-paused automation requires suiteRuns to equal 1.",
+    );
+  }
+
   for (let run = 0; run < input.suiteRuns; run += 1) {
     const [result] = await runNestedResearchSuite(
       adapter,
       input.options,
       [input.scenario],
-      { visualMode: false, captureMetrics: capture },
+      {
+        visualMode: false,
+        captureMetrics: capture,
+        onAfterWarmup: input.pauseAtMeasurementBoundaries
+          ? () => pauseAtMeasurementBoundary("after-warmup")
+          : undefined,
+        onAfterMeasured: input.pauseAtMeasurementBoundaries
+          ? () => pauseAtMeasurementBoundary("after-measured")
+          : undefined,
+      },
     );
     if (result) {
       runs.push(result);
@@ -350,6 +383,16 @@ async function runConditionForAutomation(
 window.__nestedUiBenchmark = {
   scenarios: getNestedBenchmarkScenarios().map((scenario) => scenario.key),
   runCondition: runConditionForAutomation,
+  get boundaryPhase() {
+    return boundaryPhase;
+  },
+  resumeAtMeasurementBoundary() {
+    if (!resumeAtMeasurementBoundary) {
+      throw new Error("No benchmark measurement boundary is paused.");
+    }
+
+    resumeAtMeasurementBoundary();
+  },
 };
 
 function getEffectiveOptions(
@@ -375,7 +418,9 @@ async function runSuite(): Promise<void> {
   resultsBodyEl.innerHTML = "";
   runLogEl.textContent = "";
   visualHostEl.innerHTML = "";
+  resultsSummaryEl.textContent = "Running benchmark matrix...";
   lastAggregates = [];
+  lastRawMeasurements = [];
 
   const options = {
     depth: parseInput(depthEl),
@@ -388,6 +433,11 @@ async function runSuite(): Promise<void> {
   const visualMode = visualModeEl.checked;
   const effectiveOptions = getEffectiveOptions(options, visualMode);
   const effectiveSuiteRuns = suiteRuns;
+  const thesisConfiguration = usesThesisConfiguration(
+    options,
+    suiteRuns,
+    visualMode,
+  );
 
   statusEl.textContent = `Running ${effectiveSuiteRuns} ${visualMode ? "visual " : ""}suite iteration(s)...`;
 
@@ -425,11 +475,7 @@ async function runSuite(): Promise<void> {
             {
               visualMode,
               visualHostParent: visualMode ? visualHostEl : undefined,
-              // Capture metrics when the UI option is enabled or when visual
-              // mode is active. Capturing every run by default made long
-              // suites wait on `requestAnimationFrame` per iteration and
-              // appeared to hang in test/dev runs.
-              captureMetrics: Boolean(captureMetricsEl?.checked) || visualMode,
+              captureMetrics: visualMode,
             },
           );
 
@@ -438,6 +484,7 @@ async function runSuite(): Promise<void> {
           }
 
           grouped[result.scenario][adapterKey(adapter)].push(result);
+          lastRawMeasurements.push(...result.measurements);
           runLogEl.textContent += `Run ${run} ${formatResult(result)}\n`;
           await nextFrame();
         }
@@ -449,6 +496,7 @@ async function runSuite(): Promise<void> {
       error instanceof Error ? error.message : "Unknown benchmark failure";
     statusEl.textContent = `Benchmark failed: ${message}`;
     runLogEl.textContent += `\nError: ${message}\n`;
+    resultsSummaryEl.textContent = "No valid results were produced.";
     return;
   } finally {
     runSuiteBtn.disabled = false;
@@ -481,27 +529,20 @@ async function runSuite(): Promise<void> {
   resultsBodyEl.innerHTML = aggregates
     .map(
       (result) =>
-        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${result.opsPerSecond.toFixed(2)}</td><td>${formatOptionalMetric(result.cpuUsagePercent)}</td><td>${formatOptionalMetric(result.renderingTimeMs)}</td><td>${formatOptionalMetric(result.memoryUsageMb)}</td></tr>`,
+        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${result.opsPerSecond.toFixed(2)}</td></tr>`,
     )
     .join("");
-
-  const totals = aggregates.reduce(
-    (acc, result) => {
-      acc[adapterKey(result)] += result.opsPerSecond;
-      return acc;
-    },
-    {
-      "React-baseline": 0,
-      "React-optimized": 0,
-      "Solid-baseline": 0,
-      "Solid-optimized": 0,
-    },
-  );
-
-  const winner =
-    Object.entries(totals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "none";
-  statusEl.textContent = `Completed. Higher combined ops/s across scenarios: ${winner}`;
+  resultsSummaryEl.textContent = thesisConfiguration
+    ? `${aggregates.length} condition summaries; 25 measured operations per condition.`
+    : `Custom configuration: ${effectiveOptions.warmupIterations} warm-ups and ${effectiveOptions.iterations} measured operations per condition.`;
+  statusEl.textContent = thesisConfiguration
+    ? "Completed with the thesis configuration."
+    : visualMode
+      ? "Debug preview completed; do not use these values for thesis analysis."
+      : "Completed with a custom configuration.";
 }
+
+visualModeEl.addEventListener("change", updateVisualModeVisibility);
 
 runSuiteBtn.addEventListener("click", () => {
   void runSuite();
@@ -512,5 +553,5 @@ downloadResultsBtn.addEventListener("click", () => {
     return;
   }
 
-  downloadAggregates(lastAggregates);
+  downloadAggregates(lastAggregates, lastRawMeasurements);
 });

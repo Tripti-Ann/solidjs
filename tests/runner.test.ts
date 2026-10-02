@@ -127,6 +127,35 @@ describe("nested update benchmark runner", () => {
     expect(solidOptimized.meanMs).toBeGreaterThanOrEqual(0);
   });
 
+  it("calls external measurement hooks after warmup and measured operations", async () => {
+    const phases: string[] = [];
+
+    await runNestedResearchSuite(
+      {
+        framework: "Solid",
+        variant: "baseline",
+        mount: mountSolidTree,
+      },
+      {
+        depth: 2,
+        breadth: 1,
+        warmupIterations: 5,
+        iterations: 25,
+      },
+      ["deep-leaf-updates"],
+      {
+        onAfterWarmup: () => {
+          phases.push("after-warmup");
+        },
+        onAfterMeasured: () => {
+          phases.push("after-measured");
+        },
+      },
+    );
+
+    expect(phases).toEqual(["after-warmup", "after-measured"]);
+  });
+
   it("keeps a visual preview host mounted when visual mode is enabled", async () => {
     const previewHost = document.createElement("div");
     document.body.appendChild(previewHost);

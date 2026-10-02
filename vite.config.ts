@@ -7,6 +7,11 @@ const isVitest = Boolean(
     ?.VITEST,
 );
 
+const crossOriginIsolationHeaders = {
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "require-corp",
+};
+
 export default defineConfig({
   plugins: [
     react({ include: /\.react\.tsx$/ }),
@@ -20,6 +25,12 @@ export default defineConfig({
         }
       : {},
     extensions: [".mjs", ".js", ".ts", ".jsx", ".tsx", ".json"],
+  },
+  server: {
+    headers: crossOriginIsolationHeaders,
+  },
+  preview: {
+    headers: crossOriginIsolationHeaders,
   },
   test: {
     environment: "jsdom",

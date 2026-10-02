@@ -24,6 +24,7 @@ Build and maintain a reproducible benchmark application that compares SolidJS an
 - 2026-04-21: "Ensure that AI is used ethically for this research and implementation. Include rules in the file where it should be included."
 - 2026-07-05: "Please check my application..." (thesis objective and RQ alignment review request)
 - 2026-07-05: "Yes please... methodology that you can follow... suggest improvements" (request to implement baseline vs optimized matrix and methodology-aligned reporting)
+- 2026-10-01: Approved a minimal measurement/export update: preserve the existing workload and implementations, use 5 warmups plus 25 measured operations, retain raw records, and accurately name CDP/trace metrics.
 
 ## Important Implementation Instructions
 
@@ -46,6 +47,7 @@ Build and maintain a reproducible benchmark application that compares SolidJS an
 - 2026-07-05: Added baseline and optimized variants for React and Solid benchmark adapters, and surfaced variant as a first-class benchmark dimension.
 - 2026-07-05: Added UI support for framework-variant matrix runs and aggregate JSON export for reproducible analysis.
 - 2026-07-05: Added PERFORMANCE_PROTOCOL.md to align run procedure, CPU profiling workflow, and reporting strategy with thesis methodology.
+- 2026-10-01: Updated measurement/export handling to retain raw warmup and measured operation records, calculate aggregates from the 25 measured records, and report condition-level CDP `TaskDuration` and named trace-event totals without describing them as CPU utilisation.
 
 ## Operating Protocol For Future Updates
 

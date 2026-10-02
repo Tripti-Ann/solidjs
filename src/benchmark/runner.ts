@@ -30,13 +30,15 @@ export interface BenchmarkRuntimeOptions {
   visualMode?: boolean;
   visualHostParent?: HTMLElement;
   captureMetrics?: boolean;
+  onAfterWarmup?: () => Promise<void> | void;
+  onAfterMeasured?: () => Promise<void> | void;
 }
 
 const defaultOptions: BenchmarkOptions = {
   depth: 6,
   breadth: 3,
-  warmupIterations: 60,
-  iterations: 240,
+  warmupIterations: 5,
+  iterations: 25,
 };
 
 interface ScenarioDefinition {
@@ -207,46 +209,61 @@ async function runScenario(
   const mounted = adapter.mount(host, root);
   const totalOperations = options.warmupIterations + options.iterations;
   const schedule = definition.schedule(root, options, totalOperations);
+  const resolvedOptions = {
+    ...options,
+    depth: scenarioDepth,
+    breadth: scenarioBreadth,
+  };
+  const measurements: BenchmarkResult["measurements"] = [];
 
   for (let i = 0; i < options.warmupIterations; i += 1) {
+    const start = performance.now();
     mounted.apply(schedule[i]);
+    const updateLatencyMs = performance.now() - start;
+    measurements.push({
+      framework: adapter.framework,
+      variant: adapter.variant,
+      scenario: scenarioKey,
+      iteration: i + 1,
+      phase: "warmup",
+      timestamp: new Date().toISOString(),
+      options: resolvedOptions,
+      operationKind: schedule[i].kind,
+      updateLatencyMs,
+      operationsPerSecond: updateLatencyMs > 0 ? 1000 / updateLatencyMs : 0,
+    });
   }
 
+  await runtimeOptions.onAfterWarmup?.();
+
   const iterationDurations: number[] = [];
-  const taskDurations: number[] = [];
-  const renderDurations: number[] = [];
-  const memorySamples: number[] = [];
   const shouldCaptureMetrics = Boolean(runtimeOptions.captureMetrics);
-  const memorySupported =
-    typeof performance !== "undefined" &&
-    "memory" in performance &&
-    typeof (
-      performance as Performance & { memory?: { usedJSHeapSize?: number } }
-    ).memory?.usedJSHeapSize === "number";
 
   for (let i = options.warmupIterations; i < schedule.length; i += 1) {
     const start = performance.now();
     mounted.apply(schedule[i]);
     const applyEnd = performance.now();
     iterationDurations.push(applyEnd - start);
-    taskDurations.push(applyEnd - start);
 
     if (shouldCaptureMetrics) {
       await nextFrame();
-      const frameEnd = performance.now();
-      renderDurations.push(frameEnd - applyEnd);
-      if (memorySupported) {
-        memorySamples.push(
-          (
-            performance as Performance & {
-              memory?: { usedJSHeapSize?: number };
-            }
-          ).memory!.usedJSHeapSize! /
-            (1024 * 1024),
-        );
-      }
     }
+
+    measurements.push({
+      framework: adapter.framework,
+      variant: adapter.variant,
+      scenario: scenarioKey,
+      iteration: i + 1,
+      phase: "measured",
+      timestamp: new Date().toISOString(),
+      options: resolvedOptions,
+      operationKind: schedule[i].kind,
+      updateLatencyMs: applyEnd - start,
+      operationsPerSecond: applyEnd > start ? 1000 / (applyEnd - start) : 0,
+    });
   }
+
+  await runtimeOptions.onAfterMeasured?.();
 
   const totalMs = iterationDurations.reduce((sum, value) => sum + value, 0);
   const meanMs = totalMs / iterationDurations.length;
@@ -257,29 +274,6 @@ async function runScenario(
   const p95Ms = percentile(iterationDurations, 0.95);
   const opsPerSecond = meanMs > 0 ? 1000 / meanMs : 0;
 
-  const averageMemoryMb =
-    memorySamples.length > 0
-      ? memorySamples.reduce((sum, value) => sum + value, 0) /
-        memorySamples.length
-      : null;
-
-  const averageRenderMs =
-    renderDurations.length > 0
-      ? renderDurations.reduce((sum, value) => sum + value, 0) /
-        renderDurations.length
-      : null;
-
-  const averageTaskMs =
-    taskDurations.length > 0
-      ? taskDurations.reduce((sum, value) => sum + value, 0) /
-        taskDurations.length
-      : null;
-
-  const cpuUsagePercent =
-    averageTaskMs !== null && averageRenderMs !== null
-      ? (averageTaskMs / (averageTaskMs + averageRenderMs)) * 100
-      : null;
-
   if (!shouldKeepPreview) {
     mounted.dispose();
     host.remove();
@@ -289,11 +283,8 @@ async function runScenario(
     framework: adapter.framework,
     variant: adapter.variant,
     scenario: scenarioKey,
-    options: {
-      ...options,
-      depth: scenarioDepth,
-      breadth: scenarioBreadth,
-    },
+    options: resolvedOptions,
+    measurements,
     totalMs,
     meanMs,
     medianMs,
@@ -302,9 +293,6 @@ async function runScenario(
     iqrMs,
     p95Ms,
     opsPerSecond,
-    cpuUsagePercent,
-    renderingTimeMs: averageRenderMs,
-    memoryUsageMb: averageMemoryMb,
   };
 }
 

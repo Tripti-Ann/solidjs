@@ -34,8 +34,70 @@ function readBoolArg(key, fallback = false) {
   return raw === "true" || raw === "1";
 }
 
+function readChoiceArg(key, choices) {
+  const value = args.get(`--${key}`);
+  if (!value) {
+    return choices;
+  }
+
+  if (!choices.includes(value)) {
+    throw new Error(`Invalid value for --${key}: ${value}`);
+  }
+
+  return [value];
+}
+
 function metricValue(metrics, name) {
   return metrics.find((entry) => entry.name === name)?.value ?? 0;
+}
+
+function processSnapshotKey(processInfo) {
+  return `${processInfo.type}:${processInfo.id}`;
+}
+
+function summarizeBrowserProcessCpuTime(beforeProcessInfo, afterProcessInfo) {
+  const beforeProcessInfoByKey = new Map(
+    beforeProcessInfo.map((processInfo) => [
+      processSnapshotKey(processInfo),
+      processInfo,
+    ]),
+  );
+  const afterProcessKeys = new Set(afterProcessInfo.map(processSnapshotKey));
+  const includedProcesses = afterProcessInfo.map((processInfo) => {
+    const beforeProcessInfo = beforeProcessInfoByKey.get(
+      processSnapshotKey(processInfo),
+    );
+
+    return {
+      id: processInfo.id,
+      type: processInfo.type,
+      snapshotMembership: beforeProcessInfo ? "both" : "after-only",
+      cpuTimeDeltaMs: Math.max(
+        0,
+        (processInfo.cpuTime - (beforeProcessInfo?.cpuTime ?? 0)) * 1000,
+      ),
+    };
+  });
+  const exitedProcesses = beforeProcessInfo
+    .filter(
+      (processInfo) => !afterProcessKeys.has(processSnapshotKey(processInfo)),
+    )
+    .map((processInfo) => ({
+      id: processInfo.id,
+      type: processInfo.type,
+      cpuTimeAtInitialSnapshotMs: processInfo.cpuTime * 1000,
+    }));
+
+  return {
+    browserProcessGroupCpuTimeMs: includedProcesses.reduce(
+      (total, processInfo) => total + processInfo.cpuTimeDeltaMs,
+      0,
+    ),
+    processCount: includedProcesses.length,
+    includedProcesses,
+    exitedProcesses,
+    completeProcessCoverage: exitedProcesses.length === 0,
+  };
 }
 
 function summarizeTrace(tracePayload) {
@@ -43,28 +105,17 @@ function summarizeTrace(tracePayload) {
     ? tracePayload.traceEvents
     : [];
 
-  let scriptingMs = 0;
-  let renderingMs = 0;
-  let paintingMs = 0;
-
-  const scriptingNames = new Set([
-    "EvaluateScript",
-    "FunctionCall",
-    "RunMicrotasks",
-    "V8.Execute",
-    "v8.execute",
-  ]);
-
-  const renderingNames = new Set([
+  const renderingAndPaintingEventNames = new Set([
     "Layout",
     "RecalculateStyles",
     "UpdateLayoutTree",
     "UpdateLayerTree",
     "CompositeLayers",
     "Commit",
+    "Paint",
+    "RasterTask",
   ]);
-
-  const paintingNames = new Set(["Paint", "RasterTask"]);
+  let traceRenderingAndPaintingDurationMs = 0;
 
   for (const event of events) {
     if (event?.ph !== "X" || typeof event?.dur !== "number") {
@@ -73,26 +124,14 @@ function summarizeTrace(tracePayload) {
 
     const durationMs = event.dur / 1000;
 
-    if (scriptingNames.has(event.name)) {
-      scriptingMs += durationMs;
-      continue;
-    }
-
-    if (renderingNames.has(event.name)) {
-      renderingMs += durationMs;
-      continue;
-    }
-
-    if (paintingNames.has(event.name)) {
-      paintingMs += durationMs;
+    if (renderingAndPaintingEventNames.has(event.name)) {
+      traceRenderingAndPaintingDurationMs += durationMs;
     }
   }
 
   return {
-    scriptingMs,
-    renderingMs,
-    paintingMs,
-    combinedRenderingMs: renderingMs + paintingMs,
+    eventNames: [...renderingAndPaintingEventNames],
+    traceRenderingAndPaintingDurationMs,
   };
 }
 
@@ -139,6 +178,33 @@ async function waitForUrl(inputUrl, timeoutMs = 30000) {
   return false;
 }
 
+async function resolveChromeExecutablePath() {
+  const configuredPath =
+    args.get("--chromeExecutablePath") ?? process.env.CHROME_EXECUTABLE_PATH;
+  if (configuredPath) {
+    return configuredPath;
+  }
+
+  if (process.platform !== "win32") {
+    return undefined;
+  }
+
+  const standardPath = path.join(
+    process.env.ProgramFiles ?? "C:\\Program Files",
+    "Google",
+    "Chrome",
+    "Application",
+    "chrome.exe",
+  );
+
+  try {
+    await fs.access(standardPath);
+    return standardPath;
+  } catch {
+    return undefined;
+  }
+}
+
 function stopChildProcess(child) {
   if (!child || child.killed) {
     return;
@@ -156,11 +222,11 @@ function stopChildProcess(child) {
 }
 
 const url = args.get("--url") ?? "http://127.0.0.1:5173";
-const suiteRuns = readNumberArg("suiteRuns", 5);
+const suiteRuns = readNumberArg("suiteRuns", 1);
 const depth = readNumberArg("depth", 5);
 const breadth = readNumberArg("breadth", 3);
-const warmupIterations = readNumberArg("warmup", 60);
-const iterations = readNumberArg("iterations", 240);
+const warmupIterations = readNumberArg("warmup", 5);
+const iterations = readNumberArg("iterations", 25);
 const saveTraces = readBoolArg("saveTraces", false);
 const autoStartServer = readBoolArg("autoStartServer", true);
 
@@ -171,8 +237,20 @@ const benchmarkOptions = {
   iterations,
 };
 
-const frameworks = ["React", "Solid"];
-const variants = ["baseline", "optimized"];
+const frameworks = readChoiceArg("framework", ["React", "Solid"]);
+const variants = readChoiceArg("variant", ["baseline", "optimized"]);
+const scenarioFilter = args.get("--scenario");
+const experimentEnvironment = {
+  os: "Microsoft Windows 11 Pro",
+  osVersionBuild: "10.0.26200 / build 26200",
+  cpu: "AMD Ryzen 5 5625U with Radeon Graphics",
+  logicalProcessors: 12,
+  ramGiB: 16,
+  react: "19.2.5",
+  reactDom: "19.2.5",
+  solidJs: "1.9.12",
+  reactCompiler: "disabled",
+};
 
 const runId = new Date().toISOString().replace(/[:.]/g, "-");
 const outputDir = path.join(process.cwd(), "bench", "results", runId);
@@ -215,9 +293,15 @@ if (!(await isUrlReachable(url))) {
   }
 }
 
+const chromeExecutablePath = await resolveChromeExecutablePath();
 const browser = await puppeteer.launch({
   headless: true,
+  executablePath: chromeExecutablePath,
   args: [
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-sync",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
@@ -225,6 +309,7 @@ const browser = await puppeteer.launch({
 });
 
 try {
+  const browserVersion = await browser.version();
   const page = await browser.newPage();
   await page.goto(url, { waitUntil: "networkidle0" });
   await page.waitForFunction(() => Boolean(window.__nestedUiBenchmark));
@@ -232,15 +317,23 @@ try {
   const scenarios = await page.evaluate(
     () => window.__nestedUiBenchmark?.scenarios ?? [],
   );
+  const activeScenarios = scenarioFilter
+    ? scenarios.filter((scenario) => scenario === scenarioFilter)
+    : scenarios;
+
+  if (activeScenarios.length === 0) {
+    throw new Error(`Invalid value for --scenario: ${scenarioFilter}`);
+  }
 
   const cdp = await page.target().createCDPSession();
+  const browserCdp = await browser.target().createCDPSession();
   await cdp.send("Performance.enable");
 
   const records = [];
 
   for (const framework of frameworks) {
     for (const variant of variants) {
-      for (const scenario of scenarios) {
+      for (const scenario of activeScenarios) {
         const label = `${framework}-${variant}-${scenario}`;
 
         // Two-pass approach:
@@ -263,7 +356,33 @@ try {
           },
         );
 
-        // 2) Run the benchmark with capture + tracing to collect CPU/render/memory.
+        // 2) Pause after warm-up so condition metrics exclude those operations.
+        const conditionBenchmark = page.evaluate(
+          async (payload) => {
+            const api = window.__nestedUiBenchmark;
+            if (!api) {
+              throw new Error("Automation API was not found in page context.");
+            }
+
+            return api.runCondition({
+              ...payload,
+              captureMetrics: true,
+              pauseAtMeasurementBoundaries: true,
+            });
+          },
+          {
+            framework,
+            variant,
+            scenario,
+            options: benchmarkOptions,
+            suiteRuns,
+          },
+        );
+
+        await page.waitForFunction(
+          () => window.__nestedUiBenchmark?.boundaryPhase === "after-warmup",
+        );
+
         await page.tracing.start({
           categories: [
             "devtools.timeline",
@@ -275,30 +394,28 @@ try {
         });
 
         const beforeMetrics = await cdp.send("Performance.getMetrics");
+        const beforeProcessInfo = await browserCdp.send(
+          "SystemInfo.getProcessInfo",
+        );
         const wallStart = performance.now();
+        await page.evaluate(() =>
+          window.__nestedUiBenchmark?.resumeAtMeasurementBoundary(),
+        );
 
-        const captureBenchmark = await page.evaluate(
-          async (payload) => {
-            const api = window.__nestedUiBenchmark;
-            if (!api) {
-              throw new Error("Automation API was not found in page context.");
-            }
-
-            return api.runCondition({ ...payload, captureMetrics: true });
-          },
-          {
-            framework,
-            variant,
-            scenario,
-            options: benchmarkOptions,
-            suiteRuns,
-          },
+        await page.waitForFunction(
+          () => window.__nestedUiBenchmark?.boundaryPhase === "after-measured",
         );
 
         const wallEnd = performance.now();
-
         const afterMetrics = await cdp.send("Performance.getMetrics");
+        const afterProcessInfo = await browserCdp.send(
+          "SystemInfo.getProcessInfo",
+        );
         const traceBuffer = await page.tracing.stop();
+        await page.evaluate(() =>
+          window.__nestedUiBenchmark?.resumeAtMeasurementBoundary(),
+        );
+        await conditionBenchmark;
         const traceText = Buffer.from(traceBuffer).toString("utf-8");
         const tracePayload = JSON.parse(traceText);
 
@@ -335,32 +452,17 @@ try {
           0,
           (afterScriptDuration - beforeScriptDuration) * 1000,
         );
+        const browserProcessCpuTime = summarizeBrowserProcessCpuTime(
+          beforeProcessInfo.processInfo,
+          afterProcessInfo.processInfo,
+        );
 
-        // Approximate CPU usage as total main-thread CPU task time over wall time.
-        // Values can exceed 100 due to tracing/CDP overhead and scheduling effects.
-        const cpuUsagePercent = (taskDurationMs / wallDurationMs) * 100;
-
-        // Use primaryBenchmark.aggregate for unbiased primary metrics,
-        // and augment with trace/CDP-derived secondary metrics from the
-        // captureBenchmark + trace summary.
-        const appAggregate = {
-          ...primaryBenchmark.aggregate,
-          cpuUsagePercent,
-          renderingTimeMs: traceSummary.combinedRenderingMs,
-          memoryUsageMb: jsHeapUsedMb,
-        };
-
-        const appRuns = primaryBenchmark.runs.map((run, idx) => ({
-          ...run,
-          // Use per-run memory when available from the capture pass; fall back to CDP value.
-          cpuUsagePercent,
-          renderingTimeMs: traceSummary.combinedRenderingMs,
-          memoryUsageMb:
-            captureBenchmark.runs[idx] &&
-            typeof captureBenchmark.runs[idx].memoryUsageMb === "number"
-              ? captureBenchmark.runs[idx].memoryUsageMb
-              : jsHeapUsedMb,
-        }));
+        const rawMeasurements = primaryBenchmark.runs.flatMap(
+          (run) => run.measurements,
+        );
+        const aggregates = primaryBenchmark.runs.map(
+          ({ measurements, ...aggregate }) => aggregate,
+        );
 
         if (saveTraces) {
           const tracePath = path.join(outputDir, `${label}.trace.json`);
@@ -373,17 +475,17 @@ try {
           scenario,
           suiteRuns,
           options: benchmarkOptions,
-          appAggregate,
-          appRuns,
-          cdp: {
+          aggregates,
+          rawMeasurements,
+          cdpMetrics: {
             taskDurationMs,
             scriptDurationMs,
             wallDurationMs,
-            cpuUsagePercent,
             jsHeapUsedMb,
             jsHeapTotalMb,
           },
-          trace: traceSummary,
+          cpuMetrics: browserProcessCpuTime,
+          traceMetrics: traceSummary,
         });
       }
     }
@@ -392,12 +494,28 @@ try {
   const report = {
     generatedAt: new Date().toISOString(),
     sourceUrl: url,
+    configuration: {
+      environment: {
+        ...experimentEnvironment,
+        browser: browserVersion,
+      },
+      browserVersion,
+      suiteRuns,
+      operationsPerCondition: {
+        warmup: warmupIterations,
+        measured: iterations,
+        total: warmupIterations + iterations,
+      },
+    },
     notes: {
-      cpu: "cpuUsagePercent is derived as (TaskDuration delta / wallDurationMs) * 100",
-      rendering:
-        "renderingTimeMs is trace-derived combined rendering + painting duration",
+      taskDuration:
+        "taskDurationMs is the Chrome DevTools Protocol Performance.getMetrics TaskDuration delta, converted from seconds to milliseconds. Its scope is the traced capture pass for one framework, variant, and scenario, including benchmark JavaScript and requestAnimationFrame callbacks but excluding idle wall-clock time.",
+      browserProcessGroupCpuTime:
+        "browserProcessGroupCpuTimeMs is the sum of Chrome DevTools Protocol SystemInfo.getProcessInfo cpuTime deltas across all processes in the dedicated Puppeteer browser instance that are present in the final snapshot. It is converted from seconds to milliseconds and measured from immediately after the five warm-up operations through immediately after the 25 measured operations. It is CPU time across all threads, not CPU utilisation percentage. completeProcessCoverage is false when a process present at the initial snapshot exited before the final snapshot; its unobservable in-window CPU time is not included.",
+      traceRenderingAndPainting:
+        "traceRenderingAndPaintingDurationMs is the sum of complete trace-event durations (ph = X, microseconds converted to milliseconds) for the event names in traceMetrics.eventNames during the traced capture pass. It is not a CPU utilisation metric.",
       memory:
-        "memoryUsageMb in appAggregate is set from CDP JSHeapUsedSize after each condition",
+        "jsHeapUsedMb and jsHeapTotalMb are condition-level CDP Performance.getMetrics snapshots after the traced capture pass.",
     },
     records,
   };

@@ -60,7 +60,7 @@ Out of scope:
 - subtree operation: apply a delta to all nodes in a subtree rooted at a path.
 
 4. Same warmup and measured iterations:
-   Warmup operations are excluded from timing. Measured operations are timed one-by-one using the same timer source.
+   Each condition uses 5 warmup operations excluded from timing, followed by 25 measured operations timed one-by-one using the same timer source.
 
 5. Same host conditions:
    All adapters mount into an offscreen host and are disposed after each scenario.
@@ -130,6 +130,7 @@ Path selection must be deterministic. Any pseudo-random-like path selection must
 - totalMs
 - meanMs
 - medianMs
+- iqrMs
 - p95Ms
 - opsPerSecond
 
@@ -143,17 +144,20 @@ Minimum table columns:
 
 - scenario
 - framework
+- variant
+- medianMs
+- iqrMs
 - meanMs
 - p95Ms
 - opsPerSecond
 
-If an overall score is shown, scenario-level results must be shown first.
+Do not collapse results into an overall framework ranking; report scenario-level results for every framework and variant.
 
 ## Validity Threats and Guardrails
 
 1. JIT warmup variance:
 
-- Use warmup iterations and multiple suite runs.
+- Use the configured warmup operations and retain raw records for every independent run.
 
 2. Event loop interference:
 

@@ -6,8 +6,8 @@ This project compares SolidJS and React performance for deeply nested UI workloa
 
 - Shared deterministic benchmark scenarios and update schedules
 - React and Solid adapters with baseline and optimized variants
-- Browser UI to run repeated benchmark suites and view aggregate results
-- JSON export for scenario/framework/variant aggregate results
+- Browser UI to run the benchmark matrix and view aggregate results
+- JSON export with separate raw operation records and aggregate results
 - Automated tests with Vitest
 - Benchmark runner with Vitest bench mode
 
@@ -33,15 +33,15 @@ This project compares SolidJS and React performance for deeply nested UI workloa
 - `npm run test`: run test suite once
 - `npm run test:watch`: run tests in watch mode
 - `npm run bench`: run benchmark suite in bench mode
-- `npm run metrics:chrome`: run Puppeteer + CDP metric capture (CPU/rendering/memory)
+- `npm run metrics:chrome`: run Puppeteer + CDP and trace metric capture
 
 ## Methodology notes
 
 - The browser UI runs a full matrix: scenario x framework x variant.
 - Results table includes framework variant, mean, IQR, p95, and ops/s.
-- Use Export JSON to persist aggregate outputs for thesis analysis.
-- CPU and rendering-time collection are marked as external DevTools metrics in export metadata.
-- Memory usage is exported when the browser supports the non-standard `performance.memory` API.
+- Export JSON preserves raw warm-up and measured operation records separately from aggregate outputs.
+- CDP and trace measurements are stored in the automated Chrome report, not in the browser export.
+- JavaScript heap snapshots are stored as CDP `JSHeapUsedSize` and `JSHeapTotalSize` in the automated Chrome report.
 - Protocol details are documented in `PERFORMANCE_PROTOCOL.md`.
 
 ## Automated Chrome Metrics Capture
@@ -49,9 +49,12 @@ This project compares SolidJS and React performance for deeply nested UI workloa
 This project includes `bench/chrome-metrics.mjs`, a Puppeteer-based runner that collects:
 
 - In-app benchmark aggregates (mean, IQR, p95, ops/s)
-- CDP CPU-related metrics (`TaskDuration`, `ScriptDuration` deltas)
-- Trace-derived rendering and painting duration buckets
+- Raw operation records with warm-up/measured status and update latency
+- Condition-level CDP metrics (`TaskDuration`, `ScriptDuration` deltas)
+- Trace-event duration total for explicitly named layout, paint, and compositing events
 - CDP memory metrics (`JSHeapUsedSize`, `JSHeapTotalSize`)
+
+The default condition executes 5 warm-up operations and 25 measured operations (`suiteRuns=1`).
 
 Steps:
 
@@ -63,7 +66,7 @@ Steps:
 
 3. Optional flags:
    - `npm run metrics:chrome -- --url=http://127.0.0.1:5173`
-   - `npm run metrics:chrome -- --suiteRuns=10 --depth=5 --breadth=3 --warmup=60 --iterations=240`
+   - `npm run metrics:chrome -- --suiteRuns=1 --depth=5 --breadth=3 --warmup=5 --iterations=25`
    - `npm run metrics:chrome -- --saveTraces=true`
 
 Output:

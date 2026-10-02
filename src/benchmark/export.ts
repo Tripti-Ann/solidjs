@@ -1,6 +1,29 @@
-import type { BenchmarkResult } from "./types";
+import type { BenchmarkMeasurement, BenchmarkResult } from "./types";
 
-export interface ExportedBenchmarkResult extends BenchmarkResult {
+const experimentConfiguration = {
+  environment: {
+    os: "Microsoft Windows 11 Pro",
+    osVersionBuild: "10.0.26200 / build 26200",
+    cpu: "AMD Ryzen 5 5625U with Radeon Graphics",
+    logicalProcessors: 12,
+    ramGiB: 16,
+    browser: "Google Chrome 154.0.8037.93 (Official Build, 64-bit)",
+    react: "19.2.5",
+    reactDom: "19.2.5",
+    solidJs: "1.9.12",
+    reactCompiler: "disabled",
+  },
+  operationsPerCondition: {
+    warmup: 5,
+    measured: 25,
+    total: 30,
+  },
+};
+
+export interface ExportedBenchmarkResult extends Omit<
+  BenchmarkResult,
+  "measurements"
+> {
   primaryMetrics: {
     totalMs: number;
     meanMs: number;
@@ -11,42 +34,35 @@ export interface ExportedBenchmarkResult extends BenchmarkResult {
     p95Ms: number;
     opsPerSecond: number;
   };
-  secondaryMetrics: {
-    cpuUsagePercent: number | null;
-    renderingTimeMs: number | null;
-    memoryUsageMb: number | null;
-  };
 }
 
 export interface BenchmarkDownloadPayload {
   generatedAt: string;
+  configuration: typeof experimentConfiguration;
   scenarioCount: number;
   metricCoverage: {
     updateLatency: string;
     throughput: string;
     iqr: string;
-    cpuUsage: string;
-    renderingTime: string;
-    memoryUsage: string;
   };
-  results: ExportedBenchmarkResult[];
+  aggregates: ExportedBenchmarkResult[];
+  rawMeasurements: BenchmarkMeasurement[];
 }
 
 export function buildBenchmarkDownloadPayload(
   results: BenchmarkResult[],
+  rawMeasurements: BenchmarkMeasurement[],
 ): BenchmarkDownloadPayload {
   return {
     generatedAt: new Date().toISOString(),
+    configuration: experimentConfiguration,
     scenarioCount: results.length,
     metricCoverage: {
       updateLatency: "captured",
       throughput: "captured",
       iqr: "captured",
-      cpuUsage: "captured-if-browser-supports-performance-metrics",
-      renderingTime: "captured-if-browser-trace-is-available",
-      memoryUsage: "captured-if-browser-supports-performance-memory",
     },
-    results: results.map((result) => ({
+    aggregates: results.map(({ measurements: _measurements, ...result }) => ({
       ...result,
       primaryMetrics: {
         totalMs: result.totalMs,
@@ -58,11 +74,7 @@ export function buildBenchmarkDownloadPayload(
         p95Ms: result.p95Ms,
         opsPerSecond: result.opsPerSecond,
       },
-      secondaryMetrics: {
-        cpuUsagePercent: result.cpuUsagePercent,
-        renderingTimeMs: result.renderingTimeMs,
-        memoryUsageMb: result.memoryUsageMb,
-      },
     })),
+    rawMeasurements,
   };
 }

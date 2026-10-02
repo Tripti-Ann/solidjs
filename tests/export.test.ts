@@ -3,7 +3,7 @@ import { buildBenchmarkDownloadPayload } from "../src/benchmark/export";
 import type { BenchmarkResult } from "../src/benchmark/types";
 
 describe("benchmark download payload", () => {
-  it("includes primary and secondary metrics in the same export", () => {
+  it("separates aggregate metrics from raw measurements", () => {
     const result: BenchmarkResult = {
       framework: "React",
       variant: "baseline",
@@ -14,6 +14,7 @@ describe("benchmark download payload", () => {
         warmupIterations: 5,
         iterations: 10,
       },
+      measurements: [],
       totalMs: 10,
       meanMs: 12.5,
       medianMs: 11.75,
@@ -22,15 +23,27 @@ describe("benchmark download payload", () => {
       iqrMs: 2.75,
       p95Ms: 15.5,
       opsPerSecond: 80,
-      cpuUsagePercent: 42.5,
-      renderingTimeMs: 7.25,
-      memoryUsageMb: 128.5,
     };
+    const rawMeasurements = [
+      {
+        framework: "React" as const,
+        variant: "baseline" as const,
+        scenario: "controlled-patterns" as const,
+        iteration: 6,
+        phase: "measured" as const,
+        timestamp: "2026-10-01T00:00:00.000Z",
+        options: result.options,
+        operationKind: "point" as const,
+        updateLatencyMs: 12.5,
+        operationsPerSecond: 80,
+      },
+    ];
 
-    const payload = buildBenchmarkDownloadPayload([result]);
+    const payload = buildBenchmarkDownloadPayload([result], rawMeasurements);
 
-    expect(payload.results).toHaveLength(1);
-    expect(payload.results[0].primaryMetrics).toEqual({
+    expect(payload.aggregates).toHaveLength(1);
+    expect(payload.rawMeasurements).toEqual(rawMeasurements);
+    expect(payload.aggregates[0].primaryMetrics).toEqual({
       totalMs: 10,
       meanMs: 12.5,
       medianMs: 11.75,
@@ -39,11 +52,6 @@ describe("benchmark download payload", () => {
       iqrMs: 2.75,
       p95Ms: 15.5,
       opsPerSecond: 80,
-    });
-    expect(payload.results[0].secondaryMetrics).toEqual({
-      cpuUsagePercent: 42.5,
-      renderingTimeMs: 7.25,
-      memoryUsageMb: 128.5,
     });
   });
 });
