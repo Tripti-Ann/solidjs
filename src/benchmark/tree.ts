@@ -1,4 +1,4 @@
-import type { TreeNode, TreePath } from "./types";
+import type { BenchmarkOperation, TreeNode, TreePath } from "./types";
 
 export function createTree(depth: number, breadth: number): TreeNode {
   let idCounter = 0;
@@ -123,4 +123,13 @@ export function updateSubtreeAtPath(
       index === head ? updateSubtreeAtPath(child, tail, delta) : child,
     ),
   };
+}
+
+export function applyOperation(
+  node: TreeNode,
+  operation: BenchmarkOperation,
+): TreeNode {
+  return operation.kind === "subtree"
+    ? updateSubtreeAtPath(node, operation.path, operation.nextValue)
+    : updateTreeAtPath(node, operation.path, operation.nextValue);
 }

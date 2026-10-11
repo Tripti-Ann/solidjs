@@ -1,22 +1,20 @@
 import "./style.css";
 import {
   getNestedBenchmarkScenarios,
+  nextFrame,
   runNestedResearchSuite,
+  summarizeLatencies,
 } from "./benchmark/runner";
-import type { BenchmarkAdapter } from "./benchmark/runner";
+import { adapters, controlAdapter } from "./frameworks/adapters";
 import {
-  mountReactTree,
-  mountReactTreeOptimized,
-} from "./frameworks/reactTree.react";
-import {
-  mountSolidTree,
-  mountSolidTreeOptimized,
-} from "./frameworks/solidTree.solid";
-import { buildBenchmarkDownloadPayload } from "./benchmark/export";
+  buildBenchmarkDownloadPayload,
+  getExperimentEnvironment,
+} from "./benchmark/export";
 import type {
+  BenchmarkAdapter,
   BenchmarkMeasurement,
-  BenchmarkOptions,
   BenchmarkResult,
+  BenchmarkRunOptions,
   BenchmarkScenarioKey,
   BenchmarkVariant,
   FrameworkName,
@@ -26,19 +24,25 @@ interface AutomationConditionInput {
   framework: FrameworkName;
   variant: BenchmarkVariant;
   scenario: BenchmarkScenarioKey;
-  options: BenchmarkOptions;
+  options: BenchmarkRunOptions;
   suiteRuns: number;
   captureMetrics?: boolean;
   pauseAtMeasurementBoundaries?: boolean;
 }
 
+type BoundaryPhase = "after-warmup" | "after-measured";
+
 interface AutomationApi {
   scenarios: BenchmarkScenarioKey[];
+  adapters: Array<Pick<BenchmarkAdapter, "framework" | "variant">>;
+  buildMode: string;
+  environment: ReturnType<typeof getExperimentEnvironment>;
   runCondition(input: AutomationConditionInput): Promise<{
     aggregate: BenchmarkResult;
     runs: BenchmarkResult[];
   }>;
-  boundaryPhase: "after-warmup" | "after-measured" | null;
+  boundaryPhase: BoundaryPhase | null;
+  waitForBoundary(phase: BoundaryPhase): Promise<void>;
   resumeAtMeasurementBoundary(): void;
 }
 
@@ -60,19 +64,22 @@ app.innerHTML = `
     <header class="hero">
       <p class="eyebrow">Nested UI Research Benchmark</p>
       <h1>SolidJS vs React</h1>
-      <p class="lead">Compare deep-tree updates, context-like propagation pressure, partial subtree invalidation, and controlled update patterns using deterministic schedules.</p>
+      <p class="lead">Compare deep-tree updates, root update propagation, partial subtree invalidation, and controlled update patterns using deterministic schedules.</p>
     </header>
 
     <section class="panel controls">
       <h2>Benchmark Controls</h2>
       <div class="control-grid">
-        <label>Depth <input id="depth" type="number" min="2" max="7" value="5" /></label>
-        <label>Breadth <input id="breadth" type="number" min="2" max="5" value="3" /></label>
         <label>Warmup <input id="warmup" type="number" min="0" max="300" value="5" /></label>
         <label>Iterations <input id="iterations" type="number" min="10" max="1000" value="25" /></label>
         <label>Suite Runs <input id="suiteRuns" type="number" min="1" max="20" value="1" /></label>
       </div>
-      <p class="protocol-summary">Thesis configuration: 5 warm-ups, 25 measured operations, 1 suite run.</p>
+      <p class="protocol-summary">Thesis configuration per run: 5 warm-ups, 25 measured operations. Thesis results use independent suite runs from <code>npm run metrics:chrome</code>; this page is for single runs and debugging. Tree shapes are fixed per scenario (${getNestedBenchmarkScenarios()
+        .map(
+          (scenario) =>
+            `${scenario.label}: ${scenario.depth} &times; ${scenario.breadth}`,
+        )
+        .join("; ")}).</p>
       <label class="toggle-row">
         <input id="visualMode" type="checkbox" />
         <span>Debug visual mode</span>
@@ -100,8 +107,9 @@ app.innerHTML = `
               <th>Scenario</th>
               <th>Framework</th>
               <th>Variant</th>
-              <th>Mean (ms)</th>
+              <th>Median (ms)</th>
               <th>IQR (ms)</th>
+              <th>Mean (ms)</th>
               <th>p95 (ms)</th>
               <th>Ops/s</th>
             </tr>
@@ -118,74 +126,38 @@ app.innerHTML = `
   </main>
 `;
 
-const depthInput = document.querySelector<HTMLInputElement>("#depth");
-const breadthInput = document.querySelector<HTMLInputElement>("#breadth");
-const warmupInput = document.querySelector<HTMLInputElement>("#warmup");
-const iterationsInput = document.querySelector<HTMLInputElement>("#iterations");
-const suiteRunsInput = document.querySelector<HTMLInputElement>("#suiteRuns");
-const visualModeInput = document.querySelector<HTMLInputElement>("#visualMode");
-const runSuiteButton = document.querySelector<HTMLButtonElement>("#runSuite");
-const downloadResultsButton =
-  document.querySelector<HTMLButtonElement>("#downloadResults");
-const status = document.querySelector<HTMLParagraphElement>("#status");
-const resultsBody =
-  document.querySelector<HTMLTableSectionElement>("#resultsBody");
-const runLog = document.querySelector<HTMLPreElement>("#runLog");
-const visualHost = document.querySelector<HTMLDivElement>("#visualHost");
-const visualPanel = document.querySelector<HTMLElement>("#visualPanel");
-const resultsSummary =
-  document.querySelector<HTMLParagraphElement>("#resultsSummary");
-
-if (
-  !depthInput ||
-  !breadthInput ||
-  !warmupInput ||
-  !iterationsInput ||
-  !suiteRunsInput ||
-  !visualModeInput ||
-  !runSuiteButton ||
-  !downloadResultsButton ||
-  !status ||
-  !resultsBody ||
-  !runLog ||
-  !visualHost ||
-  !visualPanel ||
-  !resultsSummary
-) {
-  throw new Error("Benchmark controls could not be initialized.");
+function getElement<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) {
+    throw new Error(`Benchmark element ${selector} was not found.`);
+  }
+  return element;
 }
 
-const depthEl = depthInput;
-const breadthEl = breadthInput;
-const warmupEl = warmupInput;
-const iterationsEl = iterationsInput;
-const suiteRunsEl = suiteRunsInput;
-const visualModeEl = visualModeInput;
-const runSuiteBtn = runSuiteButton;
-const downloadResultsBtn = downloadResultsButton;
-const statusEl = status;
-const resultsBodyEl = resultsBody;
-const runLogEl = runLog;
-const visualHostEl = visualHost;
-const visualPanelEl = visualPanel;
-const resultsSummaryEl = resultsSummary;
+const warmupEl = getElement<HTMLInputElement>("#warmup");
+const iterationsEl = getElement<HTMLInputElement>("#iterations");
+const suiteRunsEl = getElement<HTMLInputElement>("#suiteRuns");
+const visualModeEl = getElement<HTMLInputElement>("#visualMode");
+const runSuiteBtn = getElement<HTMLButtonElement>("#runSuite");
+const downloadResultsBtn = getElement<HTMLButtonElement>("#downloadResults");
+const statusEl = getElement<HTMLParagraphElement>("#status");
+const resultsBodyEl = getElement<HTMLTableSectionElement>("#resultsBody");
+const runLogEl = getElement<HTMLPreElement>("#runLog");
+const visualHostEl = getElement<HTMLDivElement>("#visualHost");
+const visualPanelEl = getElement<HTMLElement>("#visualPanel");
+const resultsSummaryEl = getElement<HTMLParagraphElement>("#resultsSummary");
 let lastAggregates: BenchmarkResult[] = [];
 let lastRawMeasurements: BenchmarkMeasurement[] = [];
-let boundaryPhase: AutomationApi["boundaryPhase"] = null;
+let boundaryPhase: BoundaryPhase | null = null;
+let boundaryWaiter: { phase: BoundaryPhase; resolve: () => void } | undefined;
 let resumeAtMeasurementBoundary: (() => void) | undefined;
-
-function adapterKey(
-  entry: Pick<BenchmarkAdapter, "framework" | "variant">,
-): `${FrameworkName}-${BenchmarkVariant}` {
-  return `${entry.framework}-${entry.variant}`;
-}
 
 function parseInput(input: HTMLInputElement): number {
   return Number.parseInt(input.value, 10);
 }
 
 function usesThesisConfiguration(
-  options: BenchmarkOptions,
+  options: BenchmarkRunOptions,
   suiteRuns: number,
   visualMode: boolean,
 ): boolean {
@@ -204,56 +176,22 @@ function updateVisualModeVisibility(): void {
   }
 }
 
-function aggregate(
-  scenario: BenchmarkScenarioKey,
-  framework: FrameworkName,
-  variant: BenchmarkVariant,
-  values: BenchmarkResult[],
-): BenchmarkResult {
-  const total = values.reduce(
-    (acc, item) => {
-      acc.totalMs += item.totalMs;
-      acc.meanMs += item.meanMs;
-      acc.medianMs += item.medianMs;
-      acc.q1Ms += item.q1Ms;
-      acc.q3Ms += item.q3Ms;
-      acc.iqrMs += item.iqrMs;
-      acc.p95Ms += item.p95Ms;
-      acc.opsPerSecond += item.opsPerSecond;
-      return acc;
-    },
-    {
-      totalMs: 0,
-      meanMs: 0,
-      medianMs: 0,
-      q1Ms: 0,
-      q3Ms: 0,
-      iqrMs: 0,
-      p95Ms: 0,
-      opsPerSecond: 0,
-    },
-  );
-
-  const count = values.length;
+// Pools measured latencies across suite runs; averaging per-run percentiles would not yield valid percentiles.
+function aggregate(runs: BenchmarkResult[]): BenchmarkResult {
+  const measurements = runs.flatMap((run) => run.measurements);
   return {
-    scenario,
-    framework,
-    variant,
-    options: values[0].options,
-    totalMs: total.totalMs / count,
-    meanMs: total.meanMs / count,
-    medianMs: total.medianMs / count,
-    q1Ms: total.q1Ms / count,
-    q3Ms: total.q3Ms / count,
-    iqrMs: total.iqrMs / count,
-    p95Ms: total.p95Ms / count,
-    opsPerSecond: total.opsPerSecond / count,
-    measurements: values.flatMap((item) => item.measurements),
+    ...runs[0],
+    ...summarizeLatencies(
+      measurements
+        .filter((measurement) => measurement.phase === "measured")
+        .map((measurement) => measurement.updateLatencyMs),
+    ),
+    measurements,
   };
 }
 
 function formatResult(result: BenchmarkResult): string {
-  return `${result.scenario.padEnd(30)} | ${result.framework.padEnd(5)} | ${result.variant.padEnd(9)} | mean=${result.meanMs.toFixed(4)}ms | p95=${result.p95Ms.toFixed(4)}ms | ops/s=${result.opsPerSecond.toFixed(2)}`;
+  return `${result.scenario.padEnd(30)} | ${result.framework.padEnd(5)} | ${result.variant.padEnd(9)} | shape=${result.options.depth}x${result.options.breadth} | median=${result.medianMs.toFixed(4)}ms | mean=${result.meanMs.toFixed(4)}ms | p95=${result.p95Ms.toFixed(4)}ms | ops/s=${result.opsPerSecond.toFixed(2)}`;
 }
 
 function downloadAggregates(
@@ -274,20 +212,16 @@ function downloadAggregates(
   URL.revokeObjectURL(url);
 }
 
-function nextFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
-}
-
-function pauseAtMeasurementBoundary(
-  phase: Exclude<AutomationApi["boundaryPhase"], null>,
-): Promise<void> {
+function pauseAtMeasurementBoundary(phase: BoundaryPhase): Promise<void> {
   if (resumeAtMeasurementBoundary) {
     throw new Error("A benchmark measurement boundary is already paused.");
   }
 
   boundaryPhase = phase;
+  if (boundaryWaiter?.phase === phase) {
+    boundaryWaiter.resolve();
+    boundaryWaiter = undefined;
+  }
   return new Promise((resolve) => {
     resumeAtMeasurementBoundary = () => {
       resumeAtMeasurementBoundary = undefined;
@@ -297,34 +231,23 @@ function pauseAtMeasurementBoundary(
   });
 }
 
-const adapterRegistry: BenchmarkAdapter[] = [
-  {
-    framework: "React" as const,
-    variant: "baseline" as const,
-    mount: mountReactTree,
-  },
-  {
-    framework: "React" as const,
-    variant: "optimized" as const,
-    mount: mountReactTreeOptimized,
-  },
-  {
-    framework: "Solid" as const,
-    variant: "baseline" as const,
-    mount: mountSolidTree,
-  },
-  {
-    framework: "Solid" as const,
-    variant: "optimized" as const,
-    mount: mountSolidTreeOptimized,
-  },
-];
+// Lets automation await a boundary without polling inside the measured window.
+function waitForBoundary(phase: BoundaryPhase): Promise<void> {
+  if (boundaryPhase === phase) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    boundaryWaiter = { phase, resolve };
+  });
+}
+
+const automationAdapters = [...adapters, controlAdapter];
 
 function resolveAdapter(
   framework: FrameworkName,
   variant: BenchmarkVariant,
 ): BenchmarkAdapter {
-  const adapter = adapterRegistry.find(
+  const adapter = automationAdapters.find(
     (entry) => entry.framework === framework && entry.variant === variant,
   );
 
@@ -364,28 +287,29 @@ async function runConditionForAutomation(
           : undefined,
       },
     );
-    if (result) {
-      runs.push(result);
-    }
+    runs.push(result);
     await nextFrame();
   }
 
-  if (runs.length === 0) {
-    throw new Error("No benchmark runs were captured.");
-  }
-
   return {
-    aggregate: aggregate(input.scenario, input.framework, input.variant, runs),
+    aggregate: aggregate(runs),
     runs,
   };
 }
 
 window.__nestedUiBenchmark = {
   scenarios: getNestedBenchmarkScenarios().map((scenario) => scenario.key),
+  adapters: automationAdapters.map(({ framework, variant }) => ({
+    framework,
+    variant,
+  })),
+  buildMode: import.meta.env.MODE,
+  environment: getExperimentEnvironment(),
   runCondition: runConditionForAutomation,
   get boundaryPhase() {
     return boundaryPhase;
   },
+  waitForBoundary,
   resumeAtMeasurementBoundary() {
     if (!resumeAtMeasurementBoundary) {
       throw new Error("No benchmark measurement boundary is paused.");
@@ -396,17 +320,15 @@ window.__nestedUiBenchmark = {
 };
 
 function getEffectiveOptions(
-  options: BenchmarkOptions,
+  options: BenchmarkRunOptions,
   visualMode: boolean,
-): BenchmarkOptions {
+): BenchmarkRunOptions {
   if (!visualMode) {
     return options;
   }
 
   // Visual mode prioritizes responsiveness over benchmark rigor.
   return {
-    depth: Math.min(options.depth, 5),
-    breadth: Math.min(options.breadth, 2),
     warmupIterations: Math.min(options.warmupIterations, 3),
     iterations: Math.min(options.iterations, 12),
   };
@@ -423,8 +345,6 @@ async function runSuite(): Promise<void> {
   lastRawMeasurements = [];
 
   const options = {
-    depth: parseInput(depthEl),
-    breadth: parseInput(breadthEl),
     warmupIterations: parseInput(warmupEl),
     iterations: parseInput(iterationsEl),
   };
@@ -432,42 +352,24 @@ async function runSuite(): Promise<void> {
   const suiteRuns = parseInput(suiteRunsEl);
   const visualMode = visualModeEl.checked;
   const effectiveOptions = getEffectiveOptions(options, visualMode);
-  const effectiveSuiteRuns = suiteRuns;
   const thesisConfiguration = usesThesisConfiguration(
     options,
     suiteRuns,
     visualMode,
   );
 
-  statusEl.textContent = `Running ${effectiveSuiteRuns} ${visualMode ? "visual " : ""}suite iteration(s)...`;
+  statusEl.textContent = `Running ${suiteRuns} ${visualMode ? "visual " : ""}suite iteration(s)...`;
 
   const scenarioKeys = getNestedBenchmarkScenarios().map(
     (scenario) => scenario.key,
   );
-  const grouped: Record<
-    BenchmarkScenarioKey,
-    Record<`${FrameworkName}-${BenchmarkVariant}`, BenchmarkResult[]>
-  > = scenarioKeys.reduce(
-    (acc, scenario) => {
-      acc[scenario] = {
-        "React-baseline": [],
-        "React-optimized": [],
-        "Solid-baseline": [],
-        "Solid-optimized": [],
-      };
-      return acc;
-    },
-    {} as Record<
-      BenchmarkScenarioKey,
-      Record<`${FrameworkName}-${BenchmarkVariant}`, BenchmarkResult[]>
-    >,
-  );
+  const results: BenchmarkResult[] = [];
 
   try {
-    for (let run = 1; run <= effectiveSuiteRuns; run += 1) {
-      for (const adapter of adapterRegistry) {
+    for (let run = 1; run <= suiteRuns; run += 1) {
+      for (const adapter of adapters) {
         for (const scenarioKey of scenarioKeys) {
-          statusEl.textContent = `Run ${run}/${effectiveSuiteRuns} - ${adapter.framework} ${adapter.variant} - ${scenarioKey}`;
+          statusEl.textContent = `Run ${run}/${suiteRuns} - ${adapter.framework} ${adapter.variant} - ${scenarioKey}`;
           const [result] = await runNestedResearchSuite(
             adapter,
             effectiveOptions,
@@ -479,11 +381,7 @@ async function runSuite(): Promise<void> {
             },
           );
 
-          if (!result) {
-            continue;
-          }
-
-          grouped[result.scenario][adapterKey(adapter)].push(result);
+          results.push(result);
           lastRawMeasurements.push(...result.measurements);
           runLogEl.textContent += `Run ${run} ${formatResult(result)}\n`;
           await nextFrame();
@@ -502,23 +400,15 @@ async function runSuite(): Promise<void> {
     runSuiteBtn.disabled = false;
   }
 
-  const aggregatePlan: Array<{
-    framework: FrameworkName;
-    variant: BenchmarkVariant;
-  }> = [
-    { framework: "React", variant: "baseline" },
-    { framework: "React", variant: "optimized" },
-    { framework: "Solid", variant: "baseline" },
-    { framework: "Solid", variant: "optimized" },
-  ];
-
   const aggregates = scenarioKeys.flatMap((scenarioKey) =>
-    aggregatePlan.map((entry) =>
+    adapters.map((adapter) =>
       aggregate(
-        scenarioKey,
-        entry.framework,
-        entry.variant,
-        grouped[scenarioKey][`${entry.framework}-${entry.variant}`],
+        results.filter(
+          (result) =>
+            result.scenario === scenarioKey &&
+            result.framework === adapter.framework &&
+            result.variant === adapter.variant,
+        ),
       ),
     ),
   );
@@ -529,14 +419,14 @@ async function runSuite(): Promise<void> {
   resultsBodyEl.innerHTML = aggregates
     .map(
       (result) =>
-        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${result.opsPerSecond.toFixed(2)}</td></tr>`,
+        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.medianMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${result.opsPerSecond.toFixed(2)}</td></tr>`,
     )
     .join("");
   resultsSummaryEl.textContent = thesisConfiguration
     ? `${aggregates.length} condition summaries; 25 measured operations per condition.`
     : `Custom configuration: ${effectiveOptions.warmupIterations} warm-ups and ${effectiveOptions.iterations} measured operations per condition.`;
   statusEl.textContent = thesisConfiguration
-    ? "Completed with the thesis configuration."
+    ? "Completed with the thesis per-run configuration."
     : visualMode
       ? "Debug preview completed; do not use these values for thesis analysis."
       : "Completed with a custom configuration.";

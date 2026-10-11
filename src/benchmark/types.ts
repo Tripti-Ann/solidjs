@@ -10,11 +10,11 @@ export interface BenchmarkOperation {
 
 export type BenchmarkScenarioKey =
   | "deep-leaf-updates"
-  | "context-propagation"
+  | "root-update-propagation"
   | "partial-subtree-invalidation"
   | "controlled-patterns";
 
-export type FrameworkName = "React" | "Solid";
+export type FrameworkName = "React" | "Solid" | "Control";
 
 export type BenchmarkVariant = "baseline" | "optimized";
 
@@ -31,6 +31,22 @@ export interface BenchmarkOptions {
   iterations: number;
 }
 
+export type BenchmarkRunOptions = Pick<
+  BenchmarkOptions,
+  "warmupIterations" | "iterations"
+>;
+
+export interface MountedTree {
+  apply(operation: BenchmarkOperation): void;
+  dispose(): void;
+}
+
+export interface BenchmarkAdapter {
+  framework: FrameworkName;
+  variant: BenchmarkVariant;
+  mount(container: HTMLElement, initialTree: TreeNode): MountedTree;
+}
+
 export type BenchmarkMeasurementPhase = "warmup" | "measured";
 
 export interface BenchmarkMeasurement {
@@ -40,10 +56,8 @@ export interface BenchmarkMeasurement {
   iteration: number;
   phase: BenchmarkMeasurementPhase;
   timestamp: string;
-  options: BenchmarkOptions;
   operationKind: BenchmarkOperationKind;
   updateLatencyMs: number;
-  operationsPerSecond: number;
 }
 
 export interface BenchmarkResult {

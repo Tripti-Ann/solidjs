@@ -13,11 +13,12 @@ In scope:
 - Deeply nested tree update performance
 - Deterministic operation schedules
 - Cross-framework comparability for identical workloads
+- Descriptive supporting metrics: post-GC JavaScript heap snapshots and garbage-collection trace time
 
 Out of scope:
 
 - Startup and bundle size ranking
-- Memory profiling and garbage collector attribution
+- Allocation-level memory profiling and causal garbage-collector attribution
 - Network or server rendering performance
 
 ## AI Ethics and Responsible Research Rules
@@ -52,7 +53,7 @@ Out of scope:
    Each framework must execute the same ordered list of operations for a given scenario.
 
 2. Same tree topology for a scenario:
-   Scenario-specific depth and breadth must be identical for all frameworks within the same run.
+   Each scenario has one fixed depth and breadth, identical for all frameworks.
 
 3. Same operation semantics:
 
@@ -81,6 +82,8 @@ Each adapter must implement:
 
 The apply method must interpret operations exactly as defined in this spec. Implementations may use framework-idiomatic APIs but cannot alter operation meaning.
 
+The Control adapter is the only exception: it renders the same markup with plain DOM and deliberately ignores updates. It is never compared as a framework; it only measures the harness overhead floor.
+
 ## Scenario Definitions
 
 The benchmark suite currently includes four scenarios.
@@ -88,30 +91,30 @@ The benchmark suite currently includes four scenarios.
 1. deep-leaf-updates:
 
 - Target: recursion depth stress
-- Shape: depth >= 100, breadth = 1
+- Shape: depth 100, breadth 1
 - Operation mix: point updates on the deepest leaf
 
-2. context-propagation:
+2. root-update-propagation:
 
-- Target: top-down invalidation pressure
-- Shape: depth >= 7, breadth >= 3
+- Target: top-down invalidation pressure from repeated root updates (no framework Context API is used)
+- Shape: depth 7, breadth 3
 - Operation mix: point updates at root path
 
 3. partial-subtree-invalidation:
 
 - Target: selective branch invalidation cost
-- Shape: depth >= 8, breadth >= 3
+- Shape: depth 8, breadth 3
 - Operation mix: subtree updates at deterministic mid-depth paths
 
 4. controlled-patterns:
 
 - Target: mixed real-world style workload
-- Shape: depth >= 7, breadth >= 3
+- Shape: depth 7, breadth 3
 - Operation mix: deterministic blend of root point, leaf point, internal point, and subtree operations
 
 ## Determinism Requirements
 
-Path selection must be deterministic. Any pseudo-random-like path selection must be seeded and formula-stable so runs are reproducible.
+Path selection must be deterministic. Any pseudo-random-like path selection must be seeded and formula-stable so runs are reproducible. The runner hashes `(seed, step)` with a 32-bit integer mixer (lowbias32) and takes the result modulo the pool size; tests assert that subtree paths are spread across the pool.
 
 ## Measurement Protocol
 
@@ -138,7 +141,7 @@ Path selection must be deterministic. Any pseudo-random-like path selection must
 
 ## Reporting Protocol
 
-Report results by framework and scenario, never only a single aggregate score.
+Report results by framework, variant, and scenario; never collapse them into a single score or overall framework ranking.
 
 Minimum table columns:
 
@@ -150,8 +153,6 @@ Minimum table columns:
 - meanMs
 - p95Ms
 - opsPerSecond
-
-Do not collapse results into an overall framework ranking; report scenario-level results for every framework and variant.
 
 ## Validity Threats and Guardrails
 
@@ -171,6 +172,7 @@ Do not collapse results into an overall framework ranking; report scenario-level
 4. Regression masking:
 
 - Maintain tests for tree helpers, scenario exposure, and runner behavior.
+- Tests apply every scenario schedule to all adapters and assert identical, correct rendered node labels (rule 7).
 
 ## Change Control
 

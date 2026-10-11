@@ -32,18 +32,23 @@ describe("benchmark download payload", () => {
         iteration: 6,
         phase: "measured" as const,
         timestamp: "2026-10-01T00:00:00.000Z",
-        options: result.options,
         operationKind: "point" as const,
         updateLatencyMs: 12.5,
-        operationsPerSecond: 80,
       },
     ];
 
     const payload = buildBenchmarkDownloadPayload([result], rawMeasurements);
 
     expect(payload.aggregates).toHaveLength(1);
+    expect(payload.conditionCount).toBe(1);
+    expect(payload.configuration.operationsPerCondition).toEqual({
+      warmup: 5,
+      measured: 10,
+      total: 15,
+    });
     expect(payload.rawMeasurements).toEqual(rawMeasurements);
-    expect(payload.aggregates[0].primaryMetrics).toEqual({
+    expect(payload.aggregates[0]).not.toHaveProperty("measurements");
+    expect(payload.aggregates[0]).toMatchObject({
       totalMs: 10,
       meanMs: 12.5,
       medianMs: 11.75,

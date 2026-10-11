@@ -1,13 +1,18 @@
 /** @jsxImportSource solid-js */
-import { createMemo, createSignal, type Accessor } from "solid-js";
+import {
+  batch,
+  createMemo,
+  createSignal,
+  Index,
+  type Accessor,
+} from "solid-js";
 import { render } from "solid-js/web";
-import type { BenchmarkOperation, TreeNode } from "../benchmark/types";
-import { updateSubtreeAtPath, updateTreeAtPath } from "../benchmark/tree";
-
-interface MountedTree {
-  apply(operation: BenchmarkOperation): void;
-  dispose(): void;
-}
+import type {
+  BenchmarkOperation,
+  MountedTree,
+  TreeNode,
+} from "../benchmark/types";
+import { applyOperation } from "../benchmark/tree";
 
 interface ReactiveTreeNode {
   id: number;
@@ -24,9 +29,12 @@ function SolidTreeNode(props: { node: TreeNode; level: number }) {
       </div>
       {props.node.children.length > 0 ? (
         <div class="node-children">
-          {props.node.children.map((child) => (
-            <SolidTreeNode node={child} level={props.level + 1} />
-          ))}
+          {/* Index reuses child components and patches them in place on immutable updates. */}
+          <Index each={props.node.children}>
+            {(child) => (
+              <SolidTreeNode node={child()} level={props.level + 1} />
+            )}
+          </Index>
         </div>
       ) : null}
     </div>
@@ -96,12 +104,8 @@ export function mountSolidTree(
   );
 
   return {
-    apply(operation: BenchmarkOperation) {
-      setTree((previous) =>
-        operation.kind === "subtree"
-          ? updateSubtreeAtPath(previous, operation.path, operation.nextValue)
-          : updateTreeAtPath(previous, operation.path, operation.nextValue),
-      );
+    apply(operation) {
+      setTree((previous) => applyOperation(previous, operation));
     },
     dispose,
   };
@@ -121,7 +125,8 @@ export function mountSolidTreeOptimized(
     apply(operation: BenchmarkOperation) {
       const target = getReactiveNodeAtPath(root, operation.path);
       if (operation.kind === "subtree") {
-        applyDeltaToReactiveSubtree(target, operation.nextValue);
+        // One propagation per operation, matching React's single flushSync render.
+        batch(() => applyDeltaToReactiveSubtree(target, operation.nextValue));
         return;
       }
 

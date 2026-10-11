@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import solid from "vite-plugin-solid";
+import solidPackage from "solid-js/package.json" with { type: "json" };
 
 const isVitest = Boolean(
   (globalThis as { process?: { env?: { VITEST?: string } } }).process?.env
@@ -13,6 +14,9 @@ const crossOriginIsolationHeaders = {
 };
 
 export default defineConfig({
+  define: {
+    __SOLID_VERSION__: JSON.stringify(solidPackage.version),
+  },
   plugins: [
     react({ include: /\.react\.tsx$/ }),
     // Keep Solid JSX transform enabled in Vitest, but disable refresh injection there.
@@ -36,8 +40,5 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     include: ["tests/**/*.test.ts"],
-    benchmark: {
-      include: ["bench/**/*.bench.ts"],
-    },
   },
 });

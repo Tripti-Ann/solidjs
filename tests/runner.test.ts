@@ -1,147 +1,161 @@
 import { describe, expect, it } from "vitest";
 import {
+  createScenario,
   getNestedBenchmarkScenarios,
   runNestedResearchSuite,
-  runNestedUpdateBenchmark,
+  summarizeLatencies,
 } from "../src/benchmark/runner";
-import {
-  mountReactTree,
-  mountReactTreeOptimized,
-} from "../src/frameworks/reactTree.react";
-import {
-  mountSolidTree,
-  mountSolidTreeOptimized,
-} from "../src/frameworks/solidTree.solid";
+import { applyOperation } from "../src/benchmark/tree";
+import type {
+  BenchmarkAdapter,
+  BenchmarkVariant,
+  FrameworkName,
+  TreeNode,
+} from "../src/benchmark/types";
+import { adapters, controlAdapter } from "../src/frameworks/adapters";
+
+function adapterFor(
+  framework: FrameworkName,
+  variant: BenchmarkVariant,
+): BenchmarkAdapter {
+  const adapter = adapters.find(
+    (entry) => entry.framework === framework && entry.variant === variant,
+  );
+  if (!adapter) {
+    throw new Error(`No adapter for ${framework} ${variant}`);
+  }
+  return adapter;
+}
+
+const reactBaseline = adapterFor("React", "baseline");
+const solidBaseline = adapterFor("Solid", "baseline");
+
+const thesisOptions = {
+  warmupIterations: 5,
+  iterations: 25,
+};
+
+function expectedLabels(node: TreeNode): string[] {
+  return [
+    `#${node.id}: ${node.value}`,
+    ...node.children.flatMap(expectedLabels),
+  ];
+}
+
+function renderedLabels(host: HTMLElement): Array<string | null> {
+  return [...host.querySelectorAll(".node-pill")].map(
+    (pill) => pill.textContent,
+  );
+}
 
 describe("nested update benchmark runner", () => {
+  it.each(getNestedBenchmarkScenarios().map((scenario) => scenario.key))(
+    "all adapters render the same, correct tree after the %s schedule",
+    (scenarioKey) => {
+      const { root, schedule } = createScenario(scenarioKey, thesisOptions);
+      const expected = expectedLabels(schedule.reduce(applyOperation, root));
+
+      for (const adapter of adapters) {
+        const host = document.createElement("div");
+        const mounted = adapter.mount(host, root);
+        schedule.forEach((operation) => mounted.apply(operation));
+        const rendered = renderedLabels(host);
+        mounted.dispose();
+
+        expect(rendered, `${adapter.framework} ${adapter.variant}`).toEqual(
+          expected,
+        );
+      }
+    },
+    60_000,
+  );
+
+  it("control adapter renders the same markup and ignores updates", () => {
+    const { root, schedule } = createScenario(
+      "controlled-patterns",
+      thesisOptions,
+    );
+    const host = document.createElement("div");
+    const mounted = controlAdapter.mount(host, root);
+    schedule.forEach((operation) => mounted.apply(operation));
+
+    expect(renderedLabels(host)).toEqual(expectedLabels(root));
+    mounted.dispose();
+    expect(host.childElementCount).toBe(0);
+  });
+
+  it("spreads deterministic path selection across the pool", () => {
+    const pathKeys = (
+      key: "partial-subtree-invalidation" | "controlled-patterns",
+    ) =>
+      new Set(
+        createScenario(key, thesisOptions)
+          .schedule.filter((operation) => operation.kind === "subtree")
+          .map((operation) => operation.path.join(".")),
+      ).size;
+
+    expect(pathKeys("partial-subtree-invalidation")).toBeGreaterThan(15);
+    expect(pathKeys("controlled-patterns")).toBeGreaterThan(4);
+    expect(
+      createScenario("controlled-patterns", thesisOptions).schedule,
+    ).toEqual(createScenario("controlled-patterns", thesisOptions).schedule);
+  });
+
+  it("summarizes latencies with nearest-rank percentiles", () => {
+    const summary = summarizeLatencies([4, 1, 3, 2]);
+
+    expect(summary).toEqual({
+      totalMs: 10,
+      meanMs: 2.5,
+      medianMs: 2,
+      q1Ms: 1,
+      q3Ms: 3,
+      iqrMs: 2,
+      p95Ms: 4,
+      opsPerSecond: 400,
+    });
+  });
+
   it("exposes expected research scenarios", () => {
     const scenarios = getNestedBenchmarkScenarios();
 
-    expect(scenarios.map((scenario) => scenario.key)).toEqual([
-      "deep-leaf-updates",
-      "context-propagation",
-      "partial-subtree-invalidation",
-      "controlled-patterns",
+    expect(
+      scenarios.map(({ key, depth, breadth }) => [key, depth, breadth]),
+    ).toEqual([
+      ["deep-leaf-updates", 100, 1],
+      ["root-update-propagation", 7, 3],
+      ["partial-subtree-invalidation", 8, 3],
+      ["controlled-patterns", 7, 3],
     ]);
   });
 
-  it("runs a single selected scenario for React", async () => {
-    const results = await runNestedResearchSuite(
-      {
-        framework: "React",
-        variant: "baseline",
-        mount: mountReactTree,
-      },
-      {
-        depth: 2,
-        breadth: 1,
-        warmupIterations: 1,
-        iterations: 2,
-      },
-      ["deep-leaf-updates"],
-    );
+  it.each(adapters)(
+    "runs a selected scenario and keeps warm-up and measured records for $framework $variant",
+    async (adapter) => {
+      const [result] = await runNestedResearchSuite(adapter, thesisOptions, [
+        "deep-leaf-updates",
+      ]);
+      const measured = result.measurements.filter(
+        (measurement) => measurement.phase === "measured",
+      );
 
-    expect(results).toHaveLength(1);
-    expect(results[0].scenario).toBe("deep-leaf-updates");
-    expect(results[0].framework).toBe("React");
-    expect(results[0].variant).toBe("baseline");
-    expect(results[0].opsPerSecond).toBeGreaterThanOrEqual(0);
-  });
-
-  it("produces metrics for React", async () => {
-    const result = await runNestedUpdateBenchmark(
-      {
-        framework: "React",
-        variant: "baseline",
-        mount: mountReactTree,
-      },
-      {
-        depth: 2,
-        breadth: 2,
-        warmupIterations: 1,
-        iterations: 2,
-      },
-    );
-
-    expect(result.framework).toBe("React");
-    expect(result.variant).toBe("baseline");
-    expect(result.scenario).toBe("controlled-patterns");
-    expect(result.meanMs).toBeGreaterThanOrEqual(0);
-    expect(result.opsPerSecond).toBeGreaterThanOrEqual(0);
-  });
-
-  it("produces metrics for Solid", async () => {
-    const result = await runNestedUpdateBenchmark(
-      {
-        framework: "Solid",
-        variant: "baseline",
-        mount: mountSolidTree,
-      },
-      {
-        depth: 2,
-        breadth: 2,
-        warmupIterations: 1,
-        iterations: 2,
-      },
-    );
-
-    expect(result.framework).toBe("Solid");
-    expect(result.variant).toBe("baseline");
-    expect(result.scenario).toBe("controlled-patterns");
-    expect(result.meanMs).toBeGreaterThanOrEqual(0);
-    expect(result.opsPerSecond).toBeGreaterThanOrEqual(0);
-  });
-
-  it("produces metrics for optimized variants", async () => {
-    const reactOptimized = await runNestedUpdateBenchmark(
-      {
-        framework: "React",
-        variant: "optimized",
-        mount: mountReactTreeOptimized,
-      },
-      {
-        depth: 2,
-        breadth: 2,
-        warmupIterations: 1,
-        iterations: 2,
-      },
-    );
-
-    const solidOptimized = await runNestedUpdateBenchmark(
-      {
-        framework: "Solid",
-        variant: "optimized",
-        mount: mountSolidTreeOptimized,
-      },
-      {
-        depth: 2,
-        breadth: 2,
-        warmupIterations: 1,
-        iterations: 2,
-      },
-    );
-
-    expect(reactOptimized.variant).toBe("optimized");
-    expect(solidOptimized.variant).toBe("optimized");
-    expect(reactOptimized.meanMs).toBeGreaterThanOrEqual(0);
-    expect(solidOptimized.meanMs).toBeGreaterThanOrEqual(0);
-  });
+      expect(result).toMatchObject({
+        framework: adapter.framework,
+        variant: adapter.variant,
+        scenario: "deep-leaf-updates",
+      });
+      expect(result.measurements).toHaveLength(30);
+      expect(measured).toHaveLength(25);
+      expect(result.meanMs).toBeGreaterThanOrEqual(0);
+    },
+  );
 
   it("calls external measurement hooks after warmup and measured operations", async () => {
     const phases: string[] = [];
 
     await runNestedResearchSuite(
-      {
-        framework: "Solid",
-        variant: "baseline",
-        mount: mountSolidTree,
-      },
-      {
-        depth: 2,
-        breadth: 1,
-        warmupIterations: 5,
-        iterations: 25,
-      },
+      solidBaseline,
+      thesisOptions,
       ["deep-leaf-updates"],
       {
         onAfterWarmup: () => {
@@ -160,18 +174,10 @@ describe("nested update benchmark runner", () => {
     const previewHost = document.createElement("div");
     document.body.appendChild(previewHost);
 
-    await runNestedUpdateBenchmark(
-      {
-        framework: "React",
-        variant: "baseline",
-        mount: mountReactTree,
-      },
-      {
-        depth: 2,
-        breadth: 1,
-        warmupIterations: 1,
-        iterations: 1,
-      },
+    await runNestedResearchSuite(
+      reactBaseline,
+      { warmupIterations: 1, iterations: 1 },
+      ["controlled-patterns"],
       {
         visualMode: true,
         visualHostParent: previewHost,

@@ -1,50 +1,46 @@
+import { version as reactVersion } from "react";
+import { version as reactDomVersion } from "react-dom";
 import type { BenchmarkMeasurement, BenchmarkResult } from "./types";
 
-const experimentConfiguration = {
-  environment: {
-    os: "Microsoft Windows 11 Pro",
-    osVersionBuild: "10.0.26200 / build 26200",
-    cpu: "AMD Ryzen 5 5625U with Radeon Graphics",
-    logicalProcessors: 12,
-    ramGiB: 16,
-    browser: "Google Chrome 154.0.8037.93 (Official Build, 64-bit)",
-    react: "19.2.5",
-    reactDom: "19.2.5",
-    solidJs: "1.9.12",
-    reactCompiler: "disabled",
-  },
-  operationsPerCondition: {
-    warmup: 5,
-    measured: 25,
-    total: 30,
-  },
-};
+declare const __SOLID_VERSION__: string;
 
-export interface ExportedBenchmarkResult extends Omit<
-  BenchmarkResult,
-  "measurements"
-> {
-  primaryMetrics: {
-    totalMs: number;
-    meanMs: number;
-    medianMs: number;
-    q1Ms: number;
-    q3Ms: number;
-    iqrMs: number;
-    p95Ms: number;
-    opsPerSecond: number;
+// Smallest non-zero performance.now() step; browsers coarsen the clock (5 µs when cross-origin isolated).
+function measureTimerResolutionMs(samples = 1000): number {
+  let smallest = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < samples; i += 1) {
+    const start = performance.now();
+    let next = performance.now();
+    while (next === start) {
+      next = performance.now();
+    }
+    smallest = Math.min(smallest, next - start);
+  }
+  return smallest;
+}
+
+// OS and CPU model are not exposed to pages; the Chrome runner adds them from Node.
+export function getExperimentEnvironment() {
+  return {
+    userAgent: navigator.userAgent,
+    logicalProcessors: navigator.hardwareConcurrency,
+    crossOriginIsolated: globalThis.crossOriginIsolated ?? false,
+    timerResolutionMs: measureTimerResolutionMs(),
+    react: reactVersion,
+    reactDom: reactDomVersion,
+    solidJs: __SOLID_VERSION__,
+    reactCompiler: "disabled",
   };
 }
 
+export type ExportedBenchmarkResult = Omit<BenchmarkResult, "measurements">;
+
 export interface BenchmarkDownloadPayload {
   generatedAt: string;
-  configuration: typeof experimentConfiguration;
-  scenarioCount: number;
-  metricCoverage: {
-    updateLatency: string;
-    throughput: string;
-    iqr: string;
+  configuration: {
+    environment: ReturnType<typeof getExperimentEnvironment>;
+    operationsPerCondition: { warmup: number; measured: number; total: number };
   };
+  conditionCount: number;
   aggregates: ExportedBenchmarkResult[];
   rawMeasurements: BenchmarkMeasurement[];
 }
@@ -53,28 +49,21 @@ export function buildBenchmarkDownloadPayload(
   results: BenchmarkResult[],
   rawMeasurements: BenchmarkMeasurement[],
 ): BenchmarkDownloadPayload {
+  const { warmupIterations, iterations } = results[0].options;
   return {
     generatedAt: new Date().toISOString(),
-    configuration: experimentConfiguration,
-    scenarioCount: results.length,
-    metricCoverage: {
-      updateLatency: "captured",
-      throughput: "captured",
-      iqr: "captured",
-    },
-    aggregates: results.map(({ measurements: _measurements, ...result }) => ({
-      ...result,
-      primaryMetrics: {
-        totalMs: result.totalMs,
-        meanMs: result.meanMs,
-        medianMs: result.medianMs,
-        q1Ms: result.q1Ms,
-        q3Ms: result.q3Ms,
-        iqrMs: result.iqrMs,
-        p95Ms: result.p95Ms,
-        opsPerSecond: result.opsPerSecond,
+    configuration: {
+      environment: getExperimentEnvironment(),
+      operationsPerCondition: {
+        warmup: warmupIterations,
+        measured: iterations,
+        total: warmupIterations + iterations,
       },
-    })),
+    },
+    conditionCount: results.length,
+    aggregates: results.map(
+      ({ measurements: _measurements, ...result }) => result,
+    ),
     rawMeasurements,
   };
 }

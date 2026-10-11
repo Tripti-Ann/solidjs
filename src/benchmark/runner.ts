@@ -5,26 +5,16 @@ import {
   pathsAtDepth,
 } from "./tree";
 import type {
+  BenchmarkAdapter,
+  BenchmarkMeasurementPhase,
   BenchmarkOperation,
   BenchmarkOptions,
   BenchmarkResult,
+  BenchmarkRunOptions,
   BenchmarkScenarioKey,
-  BenchmarkVariant,
-  FrameworkName,
   TreeNode,
   TreePath,
 } from "./types";
-
-interface MountedTree {
-  apply(operation: BenchmarkOperation): void;
-  dispose(): void;
-}
-
-export interface BenchmarkAdapter {
-  framework: FrameworkName;
-  variant: BenchmarkVariant;
-  mount(container: HTMLElement, initialTree: TreeNode): MountedTree;
-}
 
 export interface BenchmarkRuntimeOptions {
   visualMode?: boolean;
@@ -34,9 +24,7 @@ export interface BenchmarkRuntimeOptions {
   onAfterMeasured?: () => Promise<void> | void;
 }
 
-const defaultOptions: BenchmarkOptions = {
-  depth: 6,
-  breadth: 3,
+const defaultOptions: BenchmarkRunOptions = {
   warmupIterations: 5,
   iterations: 25,
 };
@@ -44,25 +32,37 @@ const defaultOptions: BenchmarkOptions = {
 interface ScenarioDefinition {
   key: BenchmarkScenarioKey;
   label: string;
-  depth: (options: BenchmarkOptions) => number;
-  breadth: (options: BenchmarkOptions) => number;
+  depth: number;
+  breadth: number;
   schedule: (
     root: TreeNode,
-    options: BenchmarkOptions,
+    depth: number,
     totalOperations: number,
   ) => BenchmarkOperation[];
 }
 
+export type LatencySummary = Pick<
+  BenchmarkResult,
+  | "totalMs"
+  | "meanMs"
+  | "medianMs"
+  | "q1Ms"
+  | "q3Ms"
+  | "iqrMs"
+  | "p95Ms"
+  | "opsPerSecond"
+>;
+
+// Stateless 32-bit integer hash (lowbias32) so every (seed, step) pair maps uniformly onto the pool.
 function makeDeterministicIndex(
   count: number,
   seed: number,
   step: number,
 ): number {
-  if (count <= 1) {
-    return 0;
-  }
-
-  return Math.abs((seed * 1664525 + 1013904223 + step * 1103515245) % count);
+  let hash = Math.imul(seed, 0x9e3779b1) ^ Math.imul(step + 1, 0x85ebca6b);
+  hash = Math.imul(hash ^ (hash >>> 16), 0x7feb352d);
+  hash = Math.imul(hash ^ (hash >>> 15), 0x846ca68b);
+  return ((hash ^ (hash >>> 16)) >>> 0) % count;
 }
 
 function choosePath(pool: TreePath[], seed: number, step: number): TreePath {
@@ -73,13 +73,15 @@ function choosePath(pool: TreePath[], seed: number, step: number): TreePath {
   return pool[makeDeterministicIndex(pool.length, seed, step)];
 }
 
+const midDepth = (depth: number) => Math.max(2, Math.floor(depth / 2));
+
 const scenarioDefinitions: Record<BenchmarkScenarioKey, ScenarioDefinition> = {
   "deep-leaf-updates": {
     key: "deep-leaf-updates",
     label: "Deep Tree Updates",
-    depth: (options) => Math.max(options.depth, 100),
-    breadth: () => 1,
-    schedule: (root, _options, totalOperations) => {
+    depth: 100,
+    breadth: 1,
+    schedule: (root, _depth, totalOperations) => {
       const leaves = getLeafPaths(root);
       const leaf = leaves[0] ?? [];
       return Array.from({ length: totalOperations }, (_, step) => ({
@@ -89,12 +91,12 @@ const scenarioDefinitions: Record<BenchmarkScenarioKey, ScenarioDefinition> = {
       }));
     },
   },
-  "context-propagation": {
-    key: "context-propagation",
-    label: "Context Propagation Stress",
-    depth: (options) => Math.max(options.depth, 7),
-    breadth: (options) => Math.max(options.breadth, 3),
-    schedule: (_root, _options, totalOperations) =>
+  "root-update-propagation": {
+    key: "root-update-propagation",
+    label: "Root Update Propagation",
+    depth: 7,
+    breadth: 3,
+    schedule: (_root, _depth, totalOperations) =>
       Array.from({ length: totalOperations }, (_, step) => ({
         kind: "point",
         path: [],
@@ -104,11 +106,10 @@ const scenarioDefinitions: Record<BenchmarkScenarioKey, ScenarioDefinition> = {
   "partial-subtree-invalidation": {
     key: "partial-subtree-invalidation",
     label: "Partial Subtree Invalidation",
-    depth: (options) => Math.max(options.depth, 8),
-    breadth: (options) => Math.max(options.breadth, 3),
-    schedule: (root, options, totalOperations) => {
-      const midDepth = Math.max(2, Math.floor(Math.max(options.depth, 8) / 2));
-      const pool = pathsAtDepth(root, midDepth);
+    depth: 8,
+    breadth: 3,
+    schedule: (root, depth, totalOperations) => {
+      const pool = pathsAtDepth(root, midDepth(depth));
       return Array.from({ length: totalOperations }, (_, step) => ({
         kind: "subtree",
         path: choosePath(pool, 31, step),
@@ -119,15 +120,14 @@ const scenarioDefinitions: Record<BenchmarkScenarioKey, ScenarioDefinition> = {
   "controlled-patterns": {
     key: "controlled-patterns",
     label: "Controlled Update Patterns",
-    depth: (options) => Math.max(options.depth, 7),
-    breadth: (options) => Math.max(options.breadth, 3),
-    schedule: (root, options, totalOperations) => {
-      const depth = Math.max(options.depth, 7);
+    depth: 7,
+    breadth: 3,
+    schedule: (root, depth, totalOperations) => {
       const leaves = getLeafPaths(root);
       const internals = getInternalPaths(root).filter(
         (path) => path.length > 0,
       );
-      const midPool = pathsAtDepth(root, Math.max(2, Math.floor(depth / 2)));
+      const midPool = pathsAtDepth(root, midDepth(depth));
 
       return Array.from({ length: totalOperations }, (_, step) => {
         const phase = step % 8;
@@ -173,23 +173,66 @@ function percentile(values: number[], rank: number): number {
   return sorted[index];
 }
 
-function nextFrame(): Promise<void> {
+export function nextFrame(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => resolve());
   });
 }
 
+export function summarizeLatencies(durations: number[]): LatencySummary {
+  const totalMs = durations.reduce((sum, value) => sum + value, 0);
+  const meanMs = totalMs / durations.length;
+  const q1Ms = percentile(durations, 0.25);
+  const q3Ms = percentile(durations, 0.75);
+  return {
+    totalMs,
+    meanMs,
+    medianMs: percentile(durations, 0.5),
+    q1Ms,
+    q3Ms,
+    iqrMs: q3Ms - q1Ms,
+    p95Ms: percentile(durations, 0.95),
+    opsPerSecond: meanMs > 0 ? 1000 / meanMs : 0,
+  };
+}
+
+export function createScenario(
+  scenarioKey: BenchmarkScenarioKey,
+  options: BenchmarkRunOptions,
+): {
+  root: TreeNode;
+  schedule: BenchmarkOperation[];
+  options: BenchmarkOptions;
+} {
+  const { depth, breadth, schedule } = scenarioDefinitions[scenarioKey];
+  const root = createTree(depth, breadth);
+  return {
+    root,
+    schedule: schedule(
+      root,
+      depth,
+      options.warmupIterations + options.iterations,
+    ),
+    options: {
+      depth,
+      breadth,
+      warmupIterations: options.warmupIterations,
+      iterations: options.iterations,
+    },
+  };
+}
+
 async function runScenario(
   adapter: BenchmarkAdapter,
   scenarioKey: BenchmarkScenarioKey,
-  options: BenchmarkOptions,
+  options: BenchmarkRunOptions,
   runtimeOptions: BenchmarkRuntimeOptions,
 ): Promise<BenchmarkResult> {
-  const definition = scenarioDefinitions[scenarioKey];
-  const scenarioDepth = definition.depth(options);
-  const scenarioBreadth = definition.breadth(options);
-
-  const root = createTree(scenarioDepth, scenarioBreadth);
+  const {
+    root,
+    schedule,
+    options: resolvedOptions,
+  } = createScenario(scenarioKey, options);
   const host = document.createElement("div");
   host.className = runtimeOptions.visualMode
     ? "bench-host bench-host--visible"
@@ -207,72 +250,45 @@ async function runScenario(
   hostParent.append(host);
 
   const mounted = adapter.mount(host, root);
-  const totalOperations = options.warmupIterations + options.iterations;
-  const schedule = definition.schedule(root, options, totalOperations);
-  const resolvedOptions = {
-    ...options,
-    depth: scenarioDepth,
-    breadth: scenarioBreadth,
-  };
   const measurements: BenchmarkResult["measurements"] = [];
 
-  for (let i = 0; i < options.warmupIterations; i += 1) {
+  const runOperation = (
+    index: number,
+    phase: BenchmarkMeasurementPhase,
+  ): number => {
     const start = performance.now();
-    mounted.apply(schedule[i]);
+    mounted.apply(schedule[index]);
     const updateLatencyMs = performance.now() - start;
     measurements.push({
       framework: adapter.framework,
       variant: adapter.variant,
       scenario: scenarioKey,
-      iteration: i + 1,
-      phase: "warmup",
+      iteration: index + 1,
+      phase,
       timestamp: new Date().toISOString(),
-      options: resolvedOptions,
-      operationKind: schedule[i].kind,
+      operationKind: schedule[index].kind,
       updateLatencyMs,
-      operationsPerSecond: updateLatencyMs > 0 ? 1000 / updateLatencyMs : 0,
     });
+    return updateLatencyMs;
+  };
+
+  for (let i = 0; i < options.warmupIterations; i += 1) {
+    runOperation(i, "warmup");
   }
 
   await runtimeOptions.onAfterWarmup?.();
 
   const iterationDurations: number[] = [];
-  const shouldCaptureMetrics = Boolean(runtimeOptions.captureMetrics);
 
   for (let i = options.warmupIterations; i < schedule.length; i += 1) {
-    const start = performance.now();
-    mounted.apply(schedule[i]);
-    const applyEnd = performance.now();
-    iterationDurations.push(applyEnd - start);
+    iterationDurations.push(runOperation(i, "measured"));
 
-    if (shouldCaptureMetrics) {
+    if (runtimeOptions.captureMetrics) {
       await nextFrame();
     }
-
-    measurements.push({
-      framework: adapter.framework,
-      variant: adapter.variant,
-      scenario: scenarioKey,
-      iteration: i + 1,
-      phase: "measured",
-      timestamp: new Date().toISOString(),
-      options: resolvedOptions,
-      operationKind: schedule[i].kind,
-      updateLatencyMs: applyEnd - start,
-      operationsPerSecond: applyEnd > start ? 1000 / (applyEnd - start) : 0,
-    });
   }
 
   await runtimeOptions.onAfterMeasured?.();
-
-  const totalMs = iterationDurations.reduce((sum, value) => sum + value, 0);
-  const meanMs = totalMs / iterationDurations.length;
-  const q1Ms = percentile(iterationDurations, 0.25);
-  const medianMs = percentile(iterationDurations, 0.5);
-  const q3Ms = percentile(iterationDurations, 0.75);
-  const iqrMs = q3Ms - q1Ms;
-  const p95Ms = percentile(iterationDurations, 0.95);
-  const opsPerSecond = meanMs > 0 ? 1000 / meanMs : 0;
 
   if (!shouldKeepPreview) {
     mounted.dispose();
@@ -285,30 +301,24 @@ async function runScenario(
     scenario: scenarioKey,
     options: resolvedOptions,
     measurements,
-    totalMs,
-    meanMs,
-    medianMs,
-    q1Ms,
-    q3Ms,
-    iqrMs,
-    p95Ms,
-    opsPerSecond,
+    ...summarizeLatencies(iterationDurations),
   };
 }
 
 export function getNestedBenchmarkScenarios(): Array<{
   key: BenchmarkScenarioKey;
   label: string;
+  depth: number;
+  breadth: number;
 }> {
-  return Object.values(scenarioDefinitions).map((scenario) => ({
-    key: scenario.key,
-    label: scenario.label,
-  }));
+  return Object.values(scenarioDefinitions).map(
+    ({ key, label, depth, breadth }) => ({ key, label, depth, breadth }),
+  );
 }
 
 export async function runNestedResearchSuite(
   adapter: BenchmarkAdapter,
-  options: Partial<BenchmarkOptions> = {},
+  options: Partial<BenchmarkRunOptions> = {},
   scenarios?: BenchmarkScenarioKey[],
   runtimeOptions: BenchmarkRuntimeOptions = {},
 ): Promise<BenchmarkResult[]> {
@@ -323,18 +333,4 @@ export async function runNestedResearchSuite(
     );
   }
   return results;
-}
-
-export async function runNestedUpdateBenchmark(
-  adapter: BenchmarkAdapter,
-  options: Partial<BenchmarkOptions> = {},
-  runtimeOptions: BenchmarkRuntimeOptions = {},
-): Promise<BenchmarkResult> {
-  const [result] = await runNestedResearchSuite(
-    adapter,
-    options,
-    ["controlled-patterns"],
-    runtimeOptions,
-  );
-  return result;
 }

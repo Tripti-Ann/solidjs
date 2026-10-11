@@ -1,13 +1,8 @@
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { memo, type ReactElement, useCallback, useMemo } from "react";
-import type { BenchmarkOperation, TreeNode } from "../benchmark/types";
-import { updateSubtreeAtPath, updateTreeAtPath } from "../benchmark/tree";
-
-interface MountedTree {
-  apply(operation: BenchmarkOperation): void;
-  dispose(): void;
-}
+import type { MountedTree, TreeNode } from "../benchmark/types";
+import { applyOperation } from "../benchmark/tree";
 
 function ReactTreeNode(props: { node: TreeNode; level: number }) {
   return (
@@ -75,11 +70,8 @@ function mountReactTreeWithView(
   flushSync(renderTree);
 
   return {
-    apply(operation: BenchmarkOperation) {
-      current =
-        operation.kind === "subtree"
-          ? updateSubtreeAtPath(current, operation.path, operation.nextValue)
-          : updateTreeAtPath(current, operation.path, operation.nextValue);
+    apply(operation) {
+      current = applyOperation(current, operation);
       flushSync(renderTree);
     },
     dispose() {
