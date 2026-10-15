@@ -5,12 +5,17 @@ import {
   runNestedResearchSuite,
   summarizeLatencies,
 } from "../src/benchmark/runner";
-import { applyOperation } from "../src/benchmark/tree";
+import { applyOperation, createTree } from "../src/benchmark/tree";
+import {
+  createOracle,
+  expectedFinalLabels,
+  renderedLabelsMatch,
+  verifyScenario,
+} from "../src/benchmark/verify";
 import type {
   BenchmarkAdapter,
   BenchmarkVariant,
   FrameworkName,
-  TreeNode,
 } from "../src/benchmark/types";
 import { adapters, controlAdapter } from "../src/frameworks/adapters";
 
@@ -35,40 +40,131 @@ const thesisOptions = {
   iterations: 25,
 };
 
-function expectedLabels(node: TreeNode): string[] {
-  return [
-    `#${node.id}: ${node.value}`,
-    ...node.children.flatMap(expectedLabels),
-  ];
-}
-
-function renderedLabels(host: HTMLElement): Array<string | null> {
-  return [...host.querySelectorAll(".node-pill")].map(
-    (pill) => pill.textContent,
-  );
-}
-
 describe("nested update benchmark runner", () => {
   it.each(getNestedBenchmarkScenarios().map((scenario) => scenario.key))(
-    "all adapters render the same, correct tree after the %s schedule",
+    "every adapter shows the oracle's labels after each operation of the %s schedule",
     (scenarioKey) => {
       const { root, schedule } = createScenario(scenarioKey, thesisOptions);
-      const expected = expectedLabels(schedule.reduce(applyOperation, root));
 
-      for (const adapter of adapters) {
-        const host = document.createElement("div");
-        const mounted = adapter.mount(host, root);
-        schedule.forEach((operation) => mounted.apply(operation));
-        const rendered = renderedLabels(host);
-        mounted.dispose();
-
-        expect(rendered, `${adapter.framework} ${adapter.variant}`).toEqual(
-          expected,
+      for (const adapter of [...adapters, controlAdapter]) {
+        const result = verifyScenario(adapter, scenarioKey, root, schedule);
+        const failed = result.steps.find(
+          (step) => !step.labelsMatch || !step.structureMatches,
         );
+
+        expect(failed, `${adapter.framework} ${adapter.variant}`).toBeUndefined();
+        expect(result.steps).toHaveLength(schedule.length + 1);
       }
     },
-    60_000,
+    120_000,
   );
+
+  it("derives expected labels independently of the adapters' update helpers", () => {
+    const root = createTree(2, 2);
+    const oracle = createOracle(root);
+    oracle.apply({ kind: "point", path: [], nextValue: 7 });
+    oracle.apply({ kind: "subtree", path: [1], nextValue: 3 });
+
+    expect(oracle.labels()).toEqual([
+      "#0: 7",
+      "#1: 0",
+      "#2: 0",
+      "#3: 0",
+      "#4: 3",
+      "#5: 3",
+      "#6: 3",
+    ]);
+    expect(oracle.levels).toEqual([0, 1, 2, 2, 1, 2, 2]);
+    const { schedule } = createScenario("controlled-patterns", thesisOptions);
+    const tree = createTree(7, 3);
+    expect(expectedFinalLabels(reactBaseline, tree, schedule)).toEqual(
+      createOracle(schedule.reduce(applyOperation, tree)).labels(),
+    );
+  });
+
+  it("root updates change only the root label in every variant", () => {
+    const { root, schedule } = createScenario(
+      "root-update-propagation",
+      thesisOptions,
+    );
+
+    for (const adapter of adapters) {
+      const [, ...operations] = verifyScenario(
+        adapter,
+        "root-update-propagation",
+        root,
+        schedule,
+      ).steps;
+
+      // Step 1 sets the root from 0 to 0, so no label changes.
+      expect(operations.map((step) => step.changedLabels)).toEqual(
+        schedule.map((_, index) => (index === 0 ? 0 : 1)),
+      );
+      expect(
+        operations.every((step) => step.unchangedPillsMutated === 0),
+        `${adapter.framework} ${adapter.variant}`,
+      ).toBe(true);
+    }
+  }, 60_000);
+
+  it("detects an adapter that skips subtree updates", () => {
+    const { root, schedule } = createScenario(
+      "partial-subtree-invalidation",
+      thesisOptions,
+    );
+    const broken: BenchmarkAdapter = {
+      ...reactBaseline,
+      mount(container, initialTree) {
+        const mounted = reactBaseline.mount(container, initialTree);
+        return {
+          apply: (operation) =>
+            operation.kind === "point" ? mounted.apply(operation) : undefined,
+          dispose: mounted.dispose,
+        };
+      },
+    };
+
+    const result = verifyScenario(
+      broken,
+      "partial-subtree-invalidation",
+      root,
+      schedule,
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.steps[1].firstMismatch).not.toBeNull();
+  });
+
+  it("attributes DOM mutations to the pill they touch", () => {
+    const { root, schedule } = createScenario("deep-leaf-updates", thesisOptions);
+    // Writes the expected update plus one redundant write to the root pill and one outside any pill.
+    const noisy: BenchmarkAdapter = {
+      ...reactBaseline,
+      mount(container, initialTree) {
+        const mounted = reactBaseline.mount(container, initialTree);
+        return {
+          apply(operation) {
+            mounted.apply(operation);
+            const rootPill = container.querySelector(".node-pill")!;
+            rootPill.firstChild!.textContent = rootPill.firstChild!.textContent;
+            container.firstElementChild!.setAttribute("data-noise", "1");
+          },
+          dispose: mounted.dispose,
+        };
+      },
+    };
+
+    const step = verifyScenario(noisy, "deep-leaf-updates", root, schedule)
+      .steps[2];
+
+    expect(step).toMatchObject({
+      labelsMatch: true,
+      changedLabels: 1,
+      mutatedPills: 2,
+      unchangedPillsMutated: 1,
+      mutationsOutsidePills: 1,
+    });
+  });
 
   it("control adapter renders the same markup and ignores updates", () => {
     const { root, schedule } = createScenario(
@@ -79,7 +175,18 @@ describe("nested update benchmark runner", () => {
     const mounted = controlAdapter.mount(host, root);
     schedule.forEach((operation) => mounted.apply(operation));
 
-    expect(renderedLabels(host)).toEqual(expectedLabels(root));
+    expect(
+      renderedLabelsMatch(
+        host,
+        expectedFinalLabels(controlAdapter, root, schedule),
+      ),
+    ).toBe(true);
+    expect(
+      renderedLabelsMatch(
+        host,
+        expectedFinalLabels(reactBaseline, root, schedule),
+      ),
+    ).toBe(false);
     mounted.dispose();
     expect(host.childElementCount).toBe(0);
   });
@@ -114,6 +221,7 @@ describe("nested update benchmark runner", () => {
       p95Ms: 4,
       opsPerSecond: 400,
     });
+    expect(summarizeLatencies([0, 0]).opsPerSecond).toBeNull();
   });
 
   it("exposes expected research scenarios", () => {
@@ -147,8 +255,17 @@ describe("nested update benchmark runner", () => {
       expect(result.measurements).toHaveLength(30);
       expect(measured).toHaveLength(25);
       expect(result.meanMs).toBeGreaterThanOrEqual(0);
+      expect(result.domMatchesModel).toBe(true);
     },
   );
+
+  it("verifies the Control DOM against the initial tree", async () => {
+    const [result] = await runNestedResearchSuite(controlAdapter, thesisOptions, [
+      "controlled-patterns",
+    ]);
+
+    expect(result.domMatchesModel).toBe(true);
+  });
 
   it("calls external measurement hooks after warmup and measured operations", async () => {
     const phases: string[] = [];

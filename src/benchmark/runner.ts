@@ -15,6 +15,13 @@ import type {
   TreeNode,
   TreePath,
 } from "./types";
+import { expectedFinalLabels, renderedLabelsMatch } from "./verify";
+
+// performance.mark names that delimit the captured pass's measured window in Chrome traces.
+export const traceWindowMarks = {
+  start: "nested-ui-bench:measured-start",
+  end: "nested-ui-bench:measured-end",
+} as const;
 
 export interface BenchmarkRuntimeOptions {
   visualMode?: boolean;
@@ -93,7 +100,7 @@ const scenarioDefinitions: Record<BenchmarkScenarioKey, ScenarioDefinition> = {
   },
   "root-update-propagation": {
     key: "root-update-propagation",
-    label: "Root Update Propagation",
+    label: "Root Value Updates",
     depth: 7,
     breadth: 3,
     schedule: (_root, _depth, totalOperations) =>
@@ -192,7 +199,7 @@ export function summarizeLatencies(durations: number[]): LatencySummary {
     q3Ms,
     iqrMs: q3Ms - q1Ms,
     p95Ms: percentile(durations, 0.95),
-    opsPerSecond: meanMs > 0 ? 1000 / meanMs : 0,
+    opsPerSecond: meanMs > 0 ? 1000 / meanMs : null,
   };
 }
 
@@ -280,6 +287,10 @@ async function runScenario(
 
   const iterationDurations: number[] = [];
 
+  if (runtimeOptions.captureMetrics) {
+    performance.mark(traceWindowMarks.start);
+  }
+
   for (let i = options.warmupIterations; i < schedule.length; i += 1) {
     iterationDurations.push(runOperation(i, "measured"));
 
@@ -288,7 +299,17 @@ async function runScenario(
     }
   }
 
+  if (runtimeOptions.captureMetrics) {
+    performance.mark(traceWindowMarks.end);
+  }
+
   await runtimeOptions.onAfterMeasured?.();
+
+  // Runs after every latency, CPU, trace, and heap endpoint of this pass.
+  const domMatchesModel = renderedLabelsMatch(
+    host,
+    expectedFinalLabels(adapter, root, schedule),
+  );
 
   if (!shouldKeepPreview) {
     mounted.dispose();
@@ -301,6 +322,7 @@ async function runScenario(
     scenario: scenarioKey,
     options: resolvedOptions,
     measurements,
+    domMatchesModel,
     ...summarizeLatencies(iterationDurations),
   };
 }

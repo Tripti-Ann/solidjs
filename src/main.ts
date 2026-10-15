@@ -1,10 +1,13 @@
 import "./style.css";
 import {
+  createScenario,
   getNestedBenchmarkScenarios,
   nextFrame,
   runNestedResearchSuite,
   summarizeLatencies,
+  traceWindowMarks,
 } from "./benchmark/runner";
+import { verifyScenario, type CorrectnessResult } from "./benchmark/verify";
 import { adapters, controlAdapter } from "./frameworks/adapters";
 import {
   buildBenchmarkDownloadPayload,
@@ -34,13 +37,21 @@ type BoundaryPhase = "after-warmup" | "after-measured";
 
 interface AutomationApi {
   scenarios: BenchmarkScenarioKey[];
+  scenarioDefinitions: ReturnType<typeof getNestedBenchmarkScenarios>;
   adapters: Array<Pick<BenchmarkAdapter, "framework" | "variant">>;
   buildMode: string;
   environment: ReturnType<typeof getExperimentEnvironment>;
+  traceWindowMarks: typeof traceWindowMarks;
   runCondition(input: AutomationConditionInput): Promise<{
     aggregate: BenchmarkResult;
     runs: BenchmarkResult[];
   }>;
+  verifyCondition(
+    input: Pick<
+      AutomationConditionInput,
+      "framework" | "variant" | "scenario" | "options"
+    >,
+  ): CorrectnessResult;
   boundaryPhase: BoundaryPhase | null;
   waitForBoundary(phase: BoundaryPhase): Promise<void>;
   resumeAtMeasurementBoundary(): void;
@@ -64,7 +75,7 @@ app.innerHTML = `
     <header class="hero">
       <p class="eyebrow">Nested UI Research Benchmark</p>
       <h1>SolidJS vs React</h1>
-      <p class="lead">Compare deep-tree updates, root update propagation, partial subtree invalidation, and controlled update patterns using deterministic schedules.</p>
+      <p class="lead">Compare deep-tree updates, root value updates, partial subtree invalidation, and controlled update patterns using deterministic schedules.</p>
     </header>
 
     <section class="panel controls">
@@ -74,7 +85,7 @@ app.innerHTML = `
         <label>Iterations <input id="iterations" type="number" min="10" max="1000" value="25" /></label>
         <label>Suite Runs <input id="suiteRuns" type="number" min="1" max="20" value="1" /></label>
       </div>
-      <p class="protocol-summary">Thesis configuration per run: 5 warm-ups, 25 measured operations. Thesis results use independent suite runs from <code>npm run metrics:chrome</code>; this page is for single runs and debugging. Tree shapes are fixed per scenario (${getNestedBenchmarkScenarios()
+      <p class="protocol-summary">Thesis configuration per run: 5 warm-ups, 25 measured operations. Thesis results use the repeated suite runs of <code>npm run metrics:chrome</code>; this page is for single runs and debugging. Tree shapes are fixed per scenario (${getNestedBenchmarkScenarios()
         .map(
           (scenario) =>
             `${scenario.label}: ${scenario.depth} &times; ${scenario.breadth}`,
@@ -186,12 +197,16 @@ function aggregate(runs: BenchmarkResult[]): BenchmarkResult {
         .filter((measurement) => measurement.phase === "measured")
         .map((measurement) => measurement.updateLatencyMs),
     ),
+    domMatchesModel: runs.every((run) => run.domMatchesModel),
     measurements,
   };
 }
 
+const formatOps = (value: number | null) =>
+  value === null ? "–" : value.toFixed(2);
+
 function formatResult(result: BenchmarkResult): string {
-  return `${result.scenario.padEnd(30)} | ${result.framework.padEnd(5)} | ${result.variant.padEnd(9)} | shape=${result.options.depth}x${result.options.breadth} | median=${result.medianMs.toFixed(4)}ms | mean=${result.meanMs.toFixed(4)}ms | p95=${result.p95Ms.toFixed(4)}ms | ops/s=${result.opsPerSecond.toFixed(2)}`;
+  return `${result.scenario.padEnd(30)} | ${result.framework.padEnd(5)} | ${result.variant.padEnd(9)} | shape=${result.options.depth}x${result.options.breadth} | median=${result.medianMs.toFixed(4)}ms | mean=${result.meanMs.toFixed(4)}ms | p95=${result.p95Ms.toFixed(4)}ms | ops/s=${formatOps(result.opsPerSecond)} | dom=${result.domMatchesModel ? "ok" : "MISMATCH"}`;
 }
 
 function downloadAggregates(
@@ -299,13 +314,24 @@ async function runConditionForAutomation(
 
 window.__nestedUiBenchmark = {
   scenarios: getNestedBenchmarkScenarios().map((scenario) => scenario.key),
+  scenarioDefinitions: getNestedBenchmarkScenarios(),
   adapters: automationAdapters.map(({ framework, variant }) => ({
     framework,
     variant,
   })),
   buildMode: import.meta.env.MODE,
   environment: getExperimentEnvironment(),
+  traceWindowMarks,
   runCondition: runConditionForAutomation,
+  verifyCondition: ({ framework, variant, scenario, options }) => {
+    const { root, schedule } = createScenario(scenario, options);
+    return verifyScenario(
+      resolveAdapter(framework, variant),
+      scenario,
+      root,
+      schedule,
+    );
+  },
   get boundaryPhase() {
     return boundaryPhase;
   },
@@ -419,7 +445,7 @@ async function runSuite(): Promise<void> {
   resultsBodyEl.innerHTML = aggregates
     .map(
       (result) =>
-        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.medianMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${result.opsPerSecond.toFixed(2)}</td></tr>`,
+        `<tr><td>${result.scenario}</td><td>${result.framework}</td><td>${result.variant}</td><td>${result.medianMs.toFixed(4)}</td><td>${result.iqrMs.toFixed(4)}</td><td>${result.meanMs.toFixed(4)}</td><td>${result.p95Ms.toFixed(4)}</td><td>${formatOps(result.opsPerSecond)}</td></tr>`,
     )
     .join("");
   resultsSummaryEl.textContent = thesisConfiguration

@@ -73,5 +73,6 @@ export interface BenchmarkResult {
   q3Ms: number;
   iqrMs: number;
   p95Ms: number;
-  opsPerSecond: number;
+  opsPerSecond: number | null;
+  domMatchesModel: boolean;
 }

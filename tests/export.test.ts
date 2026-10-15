@@ -23,6 +23,7 @@ describe("benchmark download payload", () => {
       iqrMs: 2.75,
       p95Ms: 15.5,
       opsPerSecond: 80,
+      domMatchesModel: true,
     };
     const rawMeasurements = [
       {
