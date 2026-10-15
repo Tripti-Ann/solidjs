@@ -6,12 +6,18 @@ This project compares SolidJS and React performance for deeply nested UI workloa
 
 ```
 npm install
-npm test                 # correctness tests (about 30 s)
-npm run metrics:chrome   # builds, serves, and measures the full matrix (about 8 minutes)
-npm run report           # writes summary.md and summary.csv next to the newest report
+npm test                 # correctness tests (about 1 minute)
+npm run metrics          # builds, serves, and measures the full matrix (about 8 minutes)
+npm run report           # writes summary.md and summary.csv next to the newest complete report
 ```
 
-Quick try (one run, one condition plus Control, under a minute): `npm run metrics:chrome -- --suiteRuns=1 --framework=Solid --variant=optimized --scenario=deep-leaf-updates`. Commit your changes before a thesis run; the report records the git commit and warns about uncommitted changes.
+Quick try (one run, one condition plus Control, under a minute): `npm run metrics -- --suiteRuns=1 --framework=Solid --variant=optimized --scenario=deep-leaf-updates`. Correctness only: `npm run metrics -- --verifyOnly`. Commit your changes before a thesis run; the report records the git commit and warns about uncommitted changes.
+
+## Share or reproduce results
+
+- Results are written to `bench/results/<timestamp>/`, which git ignores. To share a run, zip that whole folder (`chrome-metrics-report.json`, `summary.md`, `summary.csv`, `*.trace.json.gz`, and `source.patch`/`source-untracked/` if present) and quote the commit in `configuration.source.gitCommit`.
+- To reproduce: `git checkout <commit>`, `npm ci`, `npm run metrics -- --suiteRuns=10 --saveTraces`, then `npm run report -- bench/results/<new timestamp>`.
+- Browser: on Windows the runner uses the installed Google Chrome; on macOS and Linux it uses Puppeteer's bundled Chrome unless `CHROME_EXECUTABLE_PATH` is set. The version is recorded in the report; results from different browser versions or machines are not directly comparable.
 
 ## Requirements and setup
 
@@ -53,7 +59,7 @@ Each scenario has a fixed tree shape (depth × breadth).
 - `npm run test`: run test suite once
 - `npm run test:watch`: run tests in watch mode
 - `npm run metrics:chrome` (alias `npm run metrics`): run Puppeteer + CDP and trace metric capture against the production build
-- `npm run report [-- <results folder>]`: summarize a Chrome report (default: newest) into `summary.md` and `summary.csv`
+- `npm run report [-- <results folder>]`: summarize a Chrome report into `summary.md` and `summary.csv` (default: newest report with measurements; earlier summaries move to `superseded/`)
 
 ## Automated Chrome Metrics Capture
 

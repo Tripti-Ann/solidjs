@@ -22,19 +22,18 @@ async function resolveReportPath(input) {
     .map((entry) => entry.name)
     .sort()
     .reverse();
+  // Without an argument, skip older protocols and correctness-only (--verifyOnly) reports.
   for (const folder of folders) {
     const candidate = path.join(resultsRoot, folder, reportFileName);
-    if (
-      await fs.access(candidate).then(
-        () => true,
-        () => false,
-      )
-    ) {
+    const parsed = await fs
+      .readFile(candidate, "utf-8")
+      .then(JSON.parse, () => null);
+    if ((parsed?.protocolVersion ?? 1) >= 2 && parsed.records?.length > 0) {
       return candidate;
     }
   }
   throw new Error(
-    `No ${reportFileName} found under ${resultsRoot}. Run npm run metrics:chrome first.`,
+    `No protocol-2+ ${reportFileName} with measurements found under ${resultsRoot}. Run npm run metrics first, or pass a results folder.`,
   );
 }
 

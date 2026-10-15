@@ -28,7 +28,7 @@ export function getExperimentEnvironment() {
     react: reactVersion,
     reactDom: reactDomVersion,
     solidJs: __SOLID_VERSION__,
-    reactCompiler: "disabled",
+    reactCompiler: "not configured (no babel-plugin-react-compiler)",
   };
 }
 
