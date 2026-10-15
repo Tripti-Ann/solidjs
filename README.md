@@ -52,7 +52,7 @@ Each scenario has a fixed tree shape (depth × breadth).
 - `npm run preview`: preview production build
 - `npm run test`: run test suite once
 - `npm run test:watch`: run tests in watch mode
-- `npm run metrics:chrome`: run Puppeteer + CDP and trace metric capture against the production build
+- `npm run metrics:chrome` (alias `npm run metrics`): run Puppeteer + CDP and trace metric capture against the production build
 - `npm run report [-- <results folder>]`: summarize a Chrome report (default: newest) into `summary.md` and `summary.csv`
 
 ## Automated Chrome Metrics Capture

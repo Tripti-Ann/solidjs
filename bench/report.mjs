@@ -300,7 +300,7 @@ const markdown = [
   "",
   "## Captured (traced) pass: supporting metrics",
   "",
-  "Medians across runs; n = runs, except rendering/GC where n = runs with valid trace markers. A separate page load with tracing and CDP sampling and one frame wait after each measured operation; captured latency includes tracing overhead. Task ms (CDP TaskDuration between two Node-side samples) and captured apply total (sum of the 25 captured apply() latencies) are separate measurements over different windows; no difference between them is reported. Rendering and GC: lengths of interval unions of the named trace events on the renderer main thread inside the page-marker window; the rendering union can contain GC that ran inside a rendering event. Trace data loss counts runs by Tracing.tracingComplete.dataLossOccurred (true/false/unknown).",
+  "Medians across runs; n = runs, except rendering/GC where n = runs with valid trace markers. A separate page load with tracing and CDP sampling and one frame wait after each measured operation; captured latency includes tracing overhead. Task ms (CDP TaskDuration between two Node-side samples) and captured apply total (sum of the 25 captured apply() latencies) are separate measurements over different windows; no difference between them is reported. Rendering and GC: lengths of interval unions of the named trace events on the renderer main thread inside the page-marker window; the rendering union can contain GC that ran inside a rendering event. Trace data loss counts runs by Tracing.tracingComplete.dataLossOccurred (true/false/unknown). Post-GC heap = CDP JSHeapUsedSize after a forced garbage collection that runs after the CPU, TaskDuration, and trace endpoints, with the tree still mounted.",
   "",
   markdownTable(
     [
@@ -315,7 +315,7 @@ const markdown = [
       "Main-thread GC union ms",
       "n valid traces",
       "Data loss true/false/unknown",
-      "Heap MiB",
+      "Post-GC heap MiB",
     ],
     rows.map((row) => [
       ...label(row),

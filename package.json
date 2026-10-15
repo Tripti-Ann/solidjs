@@ -13,6 +13,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "metrics": "node bench/chrome-metrics.mjs",
     "metrics:chrome": "node bench/chrome-metrics.mjs",
     "report": "node bench/report.mjs"
   },
