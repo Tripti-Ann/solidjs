@@ -185,7 +185,7 @@ const label = (row) => [row.scenarioLabel, row.framework, row.variant];
 const floorFlag = (row) =>
   row.timerLimited ? "†" : row.timerFloorAffected ? "°" : "";
 const range = (values) => `${Math.min(...values)}–${Math.max(...values)}`;
-const maxRuns = Math.max(...rows.map((row) => row.runs));
+const maxRuns = Math.max(0, ...rows.map((row) => row.runs));
 const runColumns = Array.from({ length: maxRuns }, (_, index) => `Run ${index + 1}`);
 const correctnessRows = report.correctness.results.map((result) => {
   const operations = result.steps.filter((step) => step.kind !== "mount");
