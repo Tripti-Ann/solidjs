@@ -52,7 +52,10 @@ describe("nested update benchmark runner", () => {
           (step) => !step.labelsMatch || !step.structureMatches,
         );
 
-        expect(failed, `${adapter.framework} ${adapter.variant}`).toBeUndefined();
+        expect(
+          failed,
+          `${adapter.framework} ${adapter.variant}`,
+        ).toBeUndefined();
         expect(result.steps).toHaveLength(schedule.length + 1);
       }
     },
@@ -136,7 +139,10 @@ describe("nested update benchmark runner", () => {
   });
 
   it("attributes DOM mutations to the pill they touch", () => {
-    const { root, schedule } = createScenario("deep-leaf-updates", thesisOptions);
+    const { root, schedule } = createScenario(
+      "deep-leaf-updates",
+      thesisOptions,
+    );
     // Writes the expected update plus one redundant write to the root pill and one outside any pill.
     const noisy: BenchmarkAdapter = {
       ...reactBaseline,
@@ -260,9 +266,11 @@ describe("nested update benchmark runner", () => {
   );
 
   it("verifies the Control DOM against the initial tree", async () => {
-    const [result] = await runNestedResearchSuite(controlAdapter, thesisOptions, [
-      "controlled-patterns",
-    ]);
+    const [result] = await runNestedResearchSuite(
+      controlAdapter,
+      thesisOptions,
+      ["controlled-patterns"],
+    );
 
     expect(result.domMatchesModel).toBe(true);
   });

@@ -83,26 +83,26 @@ Steps:
 
 1. Run `npm run metrics:chrome`. It runs `vite build`, starts `vite preview` on port 4173, and stops it at the end. If port 4173 is already in use, it stops with an error so an outdated build is never measured by accident.
 2. To measure a server you started yourself, pass `--url=...` (the report records `buildMode` and warns when it is not `production`).
-3. Run `npm run report` to get the summary tables: run-level medians (median, IQR, and every run in execution order), within-run statistics (median, IQR, mean, p95, 1000/mean), captured-pass trace and CPU metrics with per-run values, and the correctness pass. Every table states its n; values at the timer floor are flagged (°, †). Existing summaries are moved to `superseded/` rather than overwritten.
+3. Run `npm run report` to get the summary tables: run-level medians (median, IQR, and every run in execution order), within-run statistics (median, IQR, mean, p95, 1000/mean calculated per run before aggregation), captured-pass trace, CPU, and heap metrics with across-run IQRs, and the correctness pass. Every table states its n; values at the timer floor are flagged (°, †). Existing summaries are moved to `superseded/` rather than overwritten.
 
 If a run fails part-way, the conditions finished so far are still saved, marked `"incomplete": true`, and the preview server is always stopped.
 
 Flags (all optional, `--name=value`; `npm run metrics:chrome -- --help` lists them; unknown flags are rejected):
 
-| Flag                        | Default                                    | Meaning                                                      |
-| --------------------------- | ------------------------------------------ | ------------------------------------------------------------ |
-| `--url`                     | build + preview on `http://127.0.0.1:4173` | Benchmark page URL of a server you started                   |
-| `--autoStartServer`         | `true`                                     | Build and start a preview server when `--url` is unreachable |
-| `--framework`               | all                                        | `React` or `Solid`                                           |
-| `--variant`                 | all                                        | `baseline` or `optimized`                                    |
-| `--scenario`                | all                                        | One scenario key, e.g. `controlled-patterns`                 |
-| `--control`                 | `true`                                     | Include the Control condition                                |
-| `--suiteRuns`               | `10`                                       | Repeated runs per condition (one browser session)            |
-| `--shuffle` / `--seed`      | `true` / `1`                               | Seeded shuffle of condition order within each run            |
-| `--warmup` / `--iterations` | `5` / `25`                                 | Warm-up and measured operations                              |
+| Flag                        | Default                                    | Meaning                                                           |
+| --------------------------- | ------------------------------------------ | ----------------------------------------------------------------- |
+| `--url`                     | build + preview on `http://127.0.0.1:4173` | Benchmark page URL of a server you started                        |
+| `--autoStartServer`         | `true`                                     | Build and start a preview server when `--url` is unreachable      |
+| `--framework`               | all                                        | `React` or `Solid`                                                |
+| `--variant`                 | all                                        | `baseline` or `optimized`                                         |
+| `--scenario`                | all                                        | One scenario key, e.g. `controlled-patterns`                      |
+| `--control`                 | `true`                                     | Include the Control condition                                     |
+| `--suiteRuns`               | `10`                                       | Repeated runs per condition (one browser session)                 |
+| `--shuffle` / `--seed`      | `true` / `1`                               | Seeded shuffle of condition order within each run                 |
+| `--warmup` / `--iterations` | `5` / `25`                                 | Warm-up and measured operations                                   |
 | `--saveTraces`              | `false`                                    | Save gzipped Chrome trace files (`--saveTraces` alone also works) |
-| `--verifyOnly`              | `false`                                    | Only run the in-browser correctness pass                     |
-| `--chromeExecutablePath`    | auto                                       | Chrome binary (also `CHROME_EXECUTABLE_PATH`)                |
+| `--verifyOnly`              | `false`                                    | Only run the in-browser correctness pass                          |
+| `--chromeExecutablePath`    | auto                                       | Chrome binary (also `CHROME_EXECUTABLE_PATH`)                     |
 
 Output:
 

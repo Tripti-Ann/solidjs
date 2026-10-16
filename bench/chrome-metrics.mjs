@@ -253,7 +253,12 @@ function git(...gitArgs) {
 }
 
 async function packageVersion(name) {
-  const manifest = path.join(process.cwd(), "node_modules", name, "package.json");
+  const manifest = path.join(
+    process.cwd(),
+    "node_modules",
+    name,
+    "package.json",
+  );
   return JSON.parse(await fs.readFile(manifest, "utf-8")).version;
 }
 
@@ -351,13 +356,19 @@ async function hashServedFiles(baseUrl) {
   const html = Buffer.from(await indexResponse.arrayBuffer());
   const assets = [
     ...new Set(
-      [...html.toString("utf-8").matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g)].map(
-        (match) => match[1],
-      ),
+      [
+        ...html
+          .toString("utf-8")
+          .matchAll(/(?:src|href)="([^"]+\.(?:js|css))"/g),
+      ].map((match) => match[1]),
     ),
   ];
   const files = [
-    { path: new URL(baseUrl).pathname, bytes: html.length, sha256: sha256(html) },
+    {
+      path: new URL(baseUrl).pathname,
+      bytes: html.length,
+      sha256: sha256(html),
+    },
   ];
   for (const asset of assets) {
     const body = Buffer.from(
@@ -463,16 +474,21 @@ try {
   // Correctness pass in its own browser launch (same bundle and flags), so it leaves no state in the measured session.
   browser = await puppeteer.launch(launchOptions);
   const verifier = await openBenchmarkPage(browser);
-  const { scenarios, scenarioDefinitions, pageAdapters, buildMode, loadedScripts } =
-    await verifier.page.evaluate(() => ({
-      scenarios: window.__nestedUiBenchmark.scenarios,
-      scenarioDefinitions: window.__nestedUiBenchmark.scenarioDefinitions,
-      pageAdapters: window.__nestedUiBenchmark.adapters,
-      buildMode: window.__nestedUiBenchmark.buildMode,
-      loadedScripts: [...document.scripts].map(
-        (script) => new URL(script.src).pathname,
-      ),
-    }));
+  const {
+    scenarios,
+    scenarioDefinitions,
+    pageAdapters,
+    buildMode,
+    loadedScripts,
+  } = await verifier.page.evaluate(() => ({
+    scenarios: window.__nestedUiBenchmark.scenarios,
+    scenarioDefinitions: window.__nestedUiBenchmark.scenarioDefinitions,
+    pageAdapters: window.__nestedUiBenchmark.adapters,
+    buildMode: window.__nestedUiBenchmark.buildMode,
+    loadedScripts: [...document.scripts].map(
+      (script) => new URL(script.src).pathname,
+    ),
+  }));
   servedFiles.pageScriptsHashed = loadedScripts.every((script) =>
     servedFiles.files.some((file) => file.path === script),
   );
@@ -807,10 +823,9 @@ try {
         "environment.timerResolutionMs is the smallest non-zero performance.now() step observed in the page. Latencies at or below it (atOrBelowTimerResolutionCount) are below the effective timer resolution, not literally zero; exact zeros are kept.",
       taskDuration:
         "taskDurationMs is the CDP Performance.getMetrics TaskDuration delta (seconds to ms) between Node-side samples taken just before resuming the measured operations and just after they finish. tracedApplyTotalMs is the sum of the 25 captured apply() latencies. The two cover different windows and kinds of time, so their difference does not isolate work outside apply() and is not reported.",
-      cpu:
-        "Process set: every process SystemInfo.getProcessInfo reports for the dedicated browser instance at a sample. cpuMetrics.endpoints are the raw readings (cumulative cpuTime, seconds) at both samples. bothEndpointsCpuTimeMs sums cpuTime deltas of processes present at both samples: exact for those processes and a lower bound for the browser's CPU in the window, assuming a process id is not reused within the window. Processes that start and exit between the samples are never observed. observedProcessesUpperEstimateMs adds the full cumulative readings of end-only processes; it covers observed processes only, is not an upper bound on all browser CPU, and is null when a start-only process exists. lifecycle uses the session's other samples: missing-from-start-sample (seen earlier), first-observed-at-end-sample (never seen before), missing-from-end-sample (seen later), not-observed-again. GPU-process CPU is CPU time of Chrome's GPU process, not GPU hardware execution time.",
+      cpu: "Process set: every process SystemInfo.getProcessInfo reports for the dedicated browser instance at a sample. cpuMetrics.endpoints are the raw readings (cumulative cpuTime, seconds) at both samples. bothEndpointsCpuTimeMs sums cpuTime deltas of processes present at both samples: exact for those processes and a lower bound for the browser's CPU in the window, assuming a process id is not reused within the window. Processes that start and exit between the samples are never observed. observedProcessesUpperEstimateMs adds the full cumulative readings of end-only processes; it covers observed processes only, is not an upper bound on all browser CPU, and is null when a start-only process exists. lifecycle uses the session's other samples: missing-from-start-sample (seen earlier), first-observed-at-end-sample (never seen before), missing-from-end-sample (seen later), not-observed-again. GPU-process CPU is CPU time of Chrome's GPU process, not GPU hardware execution time.",
       trace:
-        "Tracing is started and ended with CDP Tracing.start/Tracing.end on the page-target session that also samples Performance metrics (categories in configuration.traceCategories, stream transfer), so Tracing.tracingComplete.dataLossOccurred is recorded per run (\"unknown\" if the event lacks the field). The window is the two performance.mark events in configuration.traceWindowMarks (trace clock, µs): the start mark is emitted just before the first measured operation, the end mark after the frame that follows the last one; it is not identical to the TaskDuration or CPU windows. The renderer is the process and thread that emitted the start marker (rendererMainThreadName). Complete events (ph X) whose names are in eventNames are clipped to the window; boundary-crossing events are counted in clippedEvents and non-complete tracked events (not used) in nonCompleteTrackedEvents. inclusiveMsByScope: inclusive clipped durations per name for rendererMain, rendererOther (other renderer threads), and otherProcesses. rendererMainRenderingUnionMs and rendererMainGcUnionMs: lengths of interval unions on the renderer main thread for the rendering names and the GC names respectively (nesting counted once; the rendering union can contain GC that ran inside a rendering event). rendererMainRenderingOrGcUnionMs: union of both sets. Units: ms. valid is false when the markers are missing or duplicated.",
+        'Tracing is started and ended with CDP Tracing.start/Tracing.end on the page-target session that also samples Performance metrics (categories in configuration.traceCategories, stream transfer), so Tracing.tracingComplete.dataLossOccurred is recorded per run ("unknown" if the event lacks the field). The window is the two performance.mark events in configuration.traceWindowMarks (trace clock, µs): the start mark is emitted just before the first measured operation, the end mark after the frame that follows the last one; it is not identical to the TaskDuration or CPU windows. The renderer is the process and thread that emitted the start marker (rendererMainThreadName). Complete events (ph X) whose names are in eventNames are clipped to the window; boundary-crossing events are counted in clippedEvents and non-complete tracked events (not used) in nonCompleteTrackedEvents. inclusiveMsByScope: inclusive clipped durations per name for rendererMain, rendererOther (other renderer threads), and otherProcesses. rendererMainRenderingUnionMs and rendererMainGcUnionMs: lengths of interval unions on the renderer main thread for the rendering names and the GC names respectively (nesting counted once; the rendering union can contain GC that ran inside a rendering event). rendererMainRenderingOrGcUnionMs: union of both sets. Units: ms. valid is false when the markers are missing or duplicated.',
       memory:
         "jsHeapUsedMb and jsHeapTotalMb are CDP Performance.getMetrics snapshots taken after a forced garbage collection (HeapProfiler.collectGarbage) at the end of the measured operations, while the tree is still mounted. jsHeapUsedDeltaMb is the post-GC used-heap change from after warm-up to after the measured operations.",
     },

@@ -81,7 +81,11 @@ export interface CorrectnessStep {
   unchangedPillsMutated: number;
   mutationRecords: number;
   mutationsOutsidePills: number;
-  firstMismatch: { index: number; expected: string; actual: string | null } | null;
+  firstMismatch: {
+    index: number;
+    expected: string;
+    actual: string | null;
+  } | null;
 }
 
 export interface CorrectnessResult {
@@ -133,7 +137,9 @@ function inspectDom(
     labelsMatch: pills.length === expected.length && mismatch === -1,
     structureMatches:
       nodes.length === levels.length &&
-      levels.every((level, index) => nodes[index].dataset.level === String(level)),
+      levels.every(
+        (level, index) => nodes[index].dataset.level === String(level),
+      ),
     changedLabels: expected.filter((label, index) => label !== previous[index])
       .length,
     mutatedPills: mutated.size,

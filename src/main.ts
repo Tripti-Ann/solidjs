@@ -163,8 +163,13 @@ let boundaryPhase: BoundaryPhase | null = null;
 let boundaryWaiter: { phase: BoundaryPhase; resolve: () => void } | undefined;
 let resumeAtMeasurementBoundary: (() => void) | undefined;
 
-function parseInput(input: HTMLInputElement): number {
-  return Number.parseInt(input.value, 10);
+// Checks the input's min/max/step attributes; the browser treats an empty field as valid.
+function readCount(input: HTMLInputElement, label: string): number | undefined {
+  if (input.value === "" || !input.validity.valid) {
+    statusEl.textContent = `${label} must be a whole number from ${input.min} to ${input.max}.`;
+    return undefined;
+  }
+  return Number(input.value);
 }
 
 function usesThesisConfiguration(
@@ -361,6 +366,17 @@ function getEffectiveOptions(
 }
 
 async function runSuite(): Promise<void> {
+  const warmupIterations = readCount(warmupEl, "Warmup");
+  const iterations = readCount(iterationsEl, "Iterations");
+  const suiteRuns = readCount(suiteRunsEl, "Suite Runs");
+  if (
+    warmupIterations === undefined ||
+    iterations === undefined ||
+    suiteRuns === undefined
+  ) {
+    return;
+  }
+
   runSuiteBtn.disabled = true;
   downloadResultsBtn.disabled = true;
   resultsBodyEl.innerHTML = "";
@@ -370,12 +386,7 @@ async function runSuite(): Promise<void> {
   lastAggregates = [];
   lastRawMeasurements = [];
 
-  const options = {
-    warmupIterations: parseInput(warmupEl),
-    iterations: parseInput(iterationsEl),
-  };
-
-  const suiteRuns = parseInput(suiteRunsEl);
+  const options = { warmupIterations, iterations };
   const visualMode = visualModeEl.checked;
   const effectiveOptions = getEffectiveOptions(options, visualMode);
   const thesisConfiguration = usesThesisConfiguration(

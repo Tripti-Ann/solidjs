@@ -25,6 +25,12 @@ export function describeRuns(values) {
   };
 }
 
+// Reporting only; describeRuns stays unchanged because chrome-metrics.mjs writes its fields to raw reports.
+export function describeSpread(values) {
+  const stats = describeRuns(values);
+  return { ...stats, iqr: stats.n === 0 ? null : stats.q3 - stats.q1 };
+}
+
 // mulberry32: small seeded PRNG so condition-order shuffles are reproducible.
 export function createRandom(seed) {
   let state = seed >>> 0;
@@ -45,7 +51,6 @@ export function shuffled(items, seed) {
   }
   return result;
 }
-
 
 export function summarizeByOperationKind(measurements) {
   const byKind = {};
@@ -234,7 +239,9 @@ const sumOf = (entries, field) =>
  */
 export function summarizeProcessCpuTime(startSample, endSample) {
   const reading = ({ id, type, cpuTime }) => ({ id, type, cpuTime });
-  const startByKey = new Map(startSample.map((info) => [processKey(info), info]));
+  const startByKey = new Map(
+    startSample.map((info) => [processKey(info), info]),
+  );
   const endKeys = new Set(endSample.map(processKey));
   const bothEndpoints = [];
   const endOnly = [];

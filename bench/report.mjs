@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { createHash } from "node:crypto";
-import { describeRuns, summarizeByOperationKind } from "./report-utils.mjs";
+import {
+  describeRuns,
+  describeSpread,
+  summarizeByOperationKind,
+} from "./report-utils.mjs";
 
 const resultsRoot = path.join(process.cwd(), "bench", "results");
 const reportFileName = "chrome-metrics-report.json";
@@ -52,14 +56,36 @@ const cpuOfType = (run, type) =>
   run.cpuMetrics.bothEndpoints
     .filter((entry) => entry.type === type)
     .reduce((sum, entry) => sum + entry.cpuTimeDeltaMs, 0);
+// CSV columns name, nameQ1, nameQ3, nameIqr, each followed by the unit.
+const spreadFields = (name, unit, stats) => ({
+  [`${name}${unit}`]: stats.median,
+  [`${name}Q1${unit}`]: stats.q1,
+  [`${name}Q3${unit}`]: stats.q3,
+  [`${name}Iqr${unit}`]: stats.iqr,
+});
 
 const rows = report.records.map((record) => {
   // Runs of one condition execute in run order, so this is also their execution order.
   const runs = [...record.runs].sort((a, b) => a.run - b.run);
   const { depth, breadth, iterations } = runs[0].aggregate.options;
-  const describe = (select) => describeRuns(runs.map(select));
+  const describe = (select) => describeSpread(runs.map(select));
   const runMedians = describe((run) => run.aggregate.medianMs);
-  const meanMs = describe((run) => run.aggregate.meanMs).median;
+  const withinRunMean = describe((run) => run.aggregate.meanMs);
+  const reciprocalMeanApplyLatency = describe((run) =>
+    run.aggregate.meanMs > 0 ? 1000 / run.aggregate.meanMs : null,
+  );
+  const capturedRunMedians = describe((run) => run.capturedAggregate.medianMs);
+  const capturedApplyTotal = describe((run) => run.capturedAggregate.totalMs);
+  const taskDuration = describe((run) => run.cdpMetrics.taskDurationMs);
+  const trace = (select) =>
+    describe((run) => (run.traceMetrics.valid ? select(run) : null));
+  const rendererMainRenderingUnion = trace(
+    (run) => run.traceMetrics.rendererMainRenderingUnionMs,
+  );
+  const rendererMainGcUnion = trace(
+    (run) => run.traceMetrics.rendererMainGcUnionMs,
+  );
+  const postGcHeap = describe((run) => run.cdpMetrics.jsHeapUsedMb);
   const cpu = describe((run) => run.cpuMetrics.bothEndpointsCpuTimeMs);
   const measured = runs.flatMap((run) =>
     run.rawMeasurements.filter((entry) => entry.phase === "measured"),
@@ -84,13 +110,17 @@ const rows = report.records.map((record) => {
     medianOfRunMediansMs: runMedians.median,
     runMedianQ1Ms: runMedians.q1,
     runMedianQ3Ms: runMedians.q3,
-    runMedianIqrMs: runMedians.q3 - runMedians.q1,
+    runMedianIqrMs: runMedians.iqr,
     runMediansMs: runs.map((run) => run.aggregate.medianMs),
     withinRunMedianMs: runMedians.median,
     withinRunIqrMs: describe((run) => run.aggregate.iqrMs).median,
-    withinRunMeanMs: meanMs,
+    withinRunMeanMs: withinRunMean.median,
     withinRunP95Ms: describe((run) => run.aggregate.p95Ms).median,
-    reciprocalMeanApplyLatencyPerSecond: meanMs > 0 ? 1000 / meanMs : null,
+    ...spreadFields(
+      "reciprocalMeanApplyLatency",
+      "PerSecond",
+      reciprocalMeanApplyLatency,
+    ),
     measuredOperations: measured.length,
     zeroLatencyCount: measured.filter((entry) => entry.updateLatencyMs === 0)
       .length,
@@ -98,27 +128,25 @@ const rows = report.records.map((record) => {
     timerFloorAffected: atOrBelowTimerResolution > 0,
     timerLimited:
       atOrBelowTimerResolution / measured.length > timerLimitedShare,
-    capturedMedianOfRunMediansMs: describe(
-      (run) => run.capturedAggregate.medianMs,
-    ).median,
-    capturedApplyTotalMs: describe((run) => run.capturedAggregate.totalMs)
-      .median,
-    taskDurationMs: describe((run) => run.cdpMetrics.taskDurationMs).median,
-    rendererMainRenderingUnionMs: describe(
-      (run) => run.traceMetrics.rendererMainRenderingUnionMs,
-    ).median,
-    rendererMainGcUnionMs: describe(
-      (run) => run.traceMetrics.rendererMainGcUnionMs,
-    ).median,
+    ...spreadFields("capturedMedianOfRunMedians", "Ms", capturedRunMedians),
+    ...spreadFields("capturedApplyTotal", "Ms", capturedApplyTotal),
+    ...spreadFields("taskDuration", "Ms", taskDuration),
+    ...spreadFields(
+      "rendererMainRenderingUnion",
+      "Ms",
+      rendererMainRenderingUnion,
+    ),
+    ...spreadFields("rendererMainGcUnion", "Ms", rendererMainGcUnion),
     validTraceRuns: runs.filter((run) => run.traceMetrics.valid).length,
     traceDataLossTrue: dataLoss(true),
     traceDataLossFalse: dataLoss(false),
     traceDataLossUnknown: dataLoss("unknown"),
-    jsHeapUsedMiB: describe((run) => run.cdpMetrics.jsHeapUsedMb).median,
-    bothEndpointsCpuTimeMs: cpu.median,
+    ...spreadFields("jsHeapUsed", "MiB", postGcHeap),
+    ...spreadFields("bothEndpointsCpuTime", "Ms", cpu),
     bothEndpointsCpuTimeMaxMs: cpu.max,
     cpuFlaggedRuns: runs.filter(
-      (run) => run.cpuMetrics.bothEndpointsCpuTimeMs > cpuFlagFactor * cpu.median,
+      (run) =>
+        run.cpuMetrics.bothEndpointsCpuTimeMs > cpuFlagFactor * cpu.median,
     ).length,
     runCpuMs: runs.map((run) => run.cpuMetrics.bothEndpointsCpuTimeMs),
     runGpuProcessCpuMs: runs.map((run) => cpuOfType(run, "GPU")),
@@ -151,6 +179,8 @@ const kindRows = report.records.flatMap((record) => {
 
 const fixed = (value, digits) =>
   value === null || value === undefined ? "–" : value.toFixed(digits);
+const spreadCell = (row, name, unit, digits) =>
+  `${fixed(row[`${name}${unit}`], digits)} [${fixed(row[`${name}Q1${unit}`], digits)}–${fixed(row[`${name}Q3${unit}`], digits)}]; ${fixed(row[`${name}Iqr${unit}`], digits)}`;
 
 function markdownTable(headers, lines) {
   return [
@@ -176,6 +206,7 @@ function csv(records) {
 }
 
 const environment = report.configuration.environment;
+const timerStepUs = fixed(environment.timerResolutionMs * 1000, 1);
 const { source, servedFiles } = report.configuration;
 const { measured } = report.configuration.operationsPerCondition;
 const runCounts = [...new Set(rows.map((row) => row.runs))].join("/");
@@ -185,7 +216,10 @@ const floorFlag = (row) =>
   row.timerLimited ? "†" : row.timerFloorAffected ? "°" : "";
 const range = (values) => `${Math.min(...values)}–${Math.max(...values)}`;
 const maxRuns = Math.max(0, ...rows.map((row) => row.runs));
-const runColumns = Array.from({ length: maxRuns }, (_, index) => `Run ${index + 1}`);
+const runColumns = Array.from(
+  { length: maxRuns },
+  (_, index) => `Run ${index + 1}`,
+);
 const correctnessRows = report.correctness.results.map((result) => {
   const operations = result.steps.filter((step) => step.kind !== "mount");
   const total = (field) =>
@@ -225,13 +259,13 @@ const markdown = [
   `Source revision: ${source.gitCommit ?? "not recorded"}${source.uncommittedChanges ? ` plus uncommitted changes (${source.statusEntries.length} status entries; tracked diff SHA-256 ${source.trackedDiffSha256?.slice(0, 16) ?? "none"}, saved as ${source.trackedDiffFile ?? "–"}; ${source.untrackedFiles.length} untracked files copied and hashed)` : ", clean working tree"}.`,
   `Served files: ${servedFiles.files.map((file) => `${file.path} (SHA-256 ${file.sha256.slice(0, 16)})`).join(", ")}; page scripts among them: ${servedFiles.pageScriptsHashed ? "yes" : "no"}.`,
   `Correctness pass (separate browser launch, DOM checked after every apply() before yielding): ${passedConditions}/${correctnessRows.length} conditions passed. Post-measurement final-state check: ${domMismatchRuns === 0 ? "matched in every measured pass" : `**failed in ${domMismatchRuns} run(s); those conditions are invalid (FAIRNESS_SPEC rule 7)**`}.`,
-  `Design: ${runCounts} repeated runs per condition within one browser session (fresh page load per pass; repeated measurements, not independent fresh-process replications); ${warmup} warm-up and ${measured} measured operations per run; timer resolution ${fixed(environment.timerResolutionMs * 1000, 1)} µs.`,
+  `Design: ${runCounts} repeated runs per condition within one browser session (fresh page load per pass; repeated measurements, not independent fresh-process replications); ${warmup} warm-up and ${measured} measured operations per run; timer resolution ${timerStepUs} µs.`,
   "",
   `Statistics: nearest-rank quantiles, index ceil(p·n) − 1 of the n sorted values. For an even n this gives the lower median (n = 10 runs: value 5; n = 6 operations: value 3). Within a run (n = ${measured}): median = value ${Math.ceil(0.5 * measured)}, Q1 = value ${Math.ceil(0.25 * measured)}, Q3 = value ${Math.ceil(0.75 * measured)}, p95 = value ${Math.ceil(0.95 * measured)}. Across runs (n = ${maxRuns}): Q1 = value ${Math.ceil(0.25 * maxRuns)}, median = value ${Math.ceil(0.5 * maxRuns)}, Q3 = value ${Math.ceil(0.75 * maxRuns)}. No confidence intervals are reported: runs are repeated measurements within one session, so the coverage of a resampling interval is not established. Reciprocal mean latency is derived from apply() latency, not measured throughput; no speedup ratios are computed.`,
   "",
   "## Primary pass: run-level update latency (main descriptive evidence)",
   "",
-  `n = runs per row; each value is one run's median of ${measured} measured latencies. Exact zeros (latency below the 5 µs timer step) are kept.`,
+  `n = runs per row; each value is one run's median of ${measured} measured latencies. Exact zeros (latency below the ${timerStepUs} µs timer step) are kept.`,
   "",
   markdownTable(
     [
@@ -270,7 +304,7 @@ const markdown = [
   "",
   "## Primary pass: within-run statistics",
   "",
-  `Each statistic is computed within one run (n = ${measured} measured operations) and summarised by the median across runs (n = runs). 1000/mean is the reciprocal of the mean synchronous apply() latency, a derived statistic and not measured application throughput; it is empty when the mean is 0.`,
+  `Each statistic is computed within one run (n = ${measured} measured operations) and summarised by the median across runs (n = runs). For 1000/mean, each run's mean is reciprocated first, then those derived values are summarised; it is not measured application throughput and is empty for a zero run mean. Primary timings bracket only each synchronous apply() call and proceed back-to-back; they do not wait for deferred rendering, layout, paint, or garbage collection, although synchronous work performed by apply() remains included.`,
   "",
   markdownTable(
     [
@@ -291,15 +325,15 @@ const markdown = [
       fixed(row.withinRunIqrMs, 3),
       `${fixed(row.withinRunMeanMs, 3)}${floorFlag(row)}`,
       fixed(row.withinRunP95Ms, 3),
-      `${fixed(row.reciprocalMeanApplyLatencyPerSecond, 0)}${floorFlag(row)}`,
+      `${fixed(row.reciprocalMeanApplyLatencyPerSecond, 0)}${floorFlag(row)} [${fixed(row.reciprocalMeanApplyLatencyQ1PerSecond, 0)}–${fixed(row.reciprocalMeanApplyLatencyQ3PerSecond, 0)}; IQR ${fixed(row.reciprocalMeanApplyLatencyIqrPerSecond, 0)}]`,
     ]),
   ),
   "",
-  `° At least one measured latency of the row is at or below the timer resolution. † More than ${timerLimitedShare * 100}%: values are quantised to timer ticks and must not be used for precise comparisons or ratios.`,
+  `° At least one measured latency of the row is at or below the smallest observed performance.now() step; this is a timer-floor flag, not a claim that those observations are zero. Exact zeros are counted separately. † More than ${timerLimitedShare * 100}%: values are quantised to timer ticks and must not be used for precise comparisons or ratios.`,
   "",
   "## Captured (traced) pass: supporting metrics",
   "",
-  "Medians across runs; n = runs, except rendering/GC where n = runs with valid trace markers. A separate page load with tracing and CDP sampling and one frame wait after each measured operation; captured latency includes tracing overhead. Task ms (CDP TaskDuration between two Node-side samples) and captured apply total (sum of the 25 captured apply() latencies) are separate measurements over different windows; no difference between them is reported. Rendering and GC: lengths of interval unions of the named trace events on the renderer main thread inside the page-marker window; the rendering union can contain GC that ran inside a rendering event. Trace data loss counts runs by Tracing.tracingComplete.dataLossOccurred (true/false/unknown). Post-GC heap = CDP JSHeapUsedSize after a forced garbage collection that runs after the CPU, TaskDuration, and trace endpoints, with the tree still mounted.",
+  "Median [Q1–Q3]; IQR is across runs. n = runs, except rendering/GC where n = runs with valid trace markers. A separate page load with tracing and CDP sampling and one frame wait after each measured operation; captured latency includes tracing overhead. Task ms (CDP TaskDuration between two Node-side samples) and captured apply total (sum of the 25 captured apply() latencies) are separate measurements over different windows; no difference between them is reported. Rendering and GC: lengths of interval unions of the named trace events on the renderer main thread inside the page-marker window; the rendering union can contain GC that ran inside a rendering event. Trace data loss counts runs by Tracing.tracingComplete.dataLossOccurred (true/false/unknown). Post-GC heap = CDP JSHeapUsedSize after a forced garbage collection that runs after the CPU, TaskDuration, and trace endpoints, with the tree still mounted.",
   "",
   markdownTable(
     [
@@ -307,11 +341,11 @@ const markdown = [
       "Framework",
       "Variant",
       "n runs",
-      "Captured median ms",
-      "Captured apply total ms",
-      "Task ms",
-      "Main-thread rendering union ms",
-      "Main-thread GC union ms",
+      "Captured median [Q1–Q3]; IQR ms",
+      "Captured apply total [Q1–Q3]; IQR ms",
+      "Task [Q1–Q3]; IQR ms",
+      "Main-thread rendering union [Q1–Q3]; IQR ms",
+      "Main-thread GC union [Q1–Q3]; IQR ms",
       "n valid traces",
       "Data loss true/false/unknown",
       "Post-GC heap MiB",
@@ -319,20 +353,20 @@ const markdown = [
     rows.map((row) => [
       ...label(row),
       row.runs,
-      fixed(row.capturedMedianOfRunMediansMs, 3),
-      fixed(row.capturedApplyTotalMs, 2),
-      fixed(row.taskDurationMs, 1),
-      fixed(row.rendererMainRenderingUnionMs, 1),
-      fixed(row.rendererMainGcUnionMs, 1),
+      spreadCell(row, "capturedMedianOfRunMedians", "Ms", 3),
+      spreadCell(row, "capturedApplyTotal", "Ms", 2),
+      spreadCell(row, "taskDuration", "Ms", 1),
+      spreadCell(row, "rendererMainRenderingUnion", "Ms", 1),
+      spreadCell(row, "rendererMainGcUnion", "Ms", 1),
       row.validTraceRuns,
       `${row.traceDataLossTrue}/${row.traceDataLossFalse}/${row.traceDataLossUnknown}`,
-      fixed(row.jsHeapUsedMiB, 2),
+      spreadCell(row, "jsHeapUsed", "MiB", 2),
     ]),
   ),
   "",
   "## Captured pass: CPU time",
   "",
-  `CPU = sum of cpuTime deltas of browser processes present at both CPU samples (a lower bound for the browser's CPU in the window; processes that start and exit between samples cannot be observed). n = runs. Flagged = runs above ${cpuFlagFactor} × the condition's median (descriptive; nothing excluded). GPU process = CPU time of Chrome's GPU process, not GPU hardware execution time.`,
+  `CPU = sum of cpuTime deltas of browser processes present at both CPU samples (a lower bound for the browser's CPU in the window; processes that start and exit between samples cannot be observed). n = runs; IQR is across runs. Flagged = runs above ${cpuFlagFactor} × the condition's median (descriptive; nothing excluded). GPU process = CPU time of Chrome's GPU process, not GPU hardware execution time.`,
   "",
   markdownTable(
     [
@@ -340,7 +374,8 @@ const markdown = [
       "Framework",
       "Variant",
       "n runs",
-      "Median ms",
+      "Median [Q1–Q3] ms",
+      "IQR ms",
       "Max ms",
       "Flagged runs",
       "Runs with process changes",
@@ -348,7 +383,8 @@ const markdown = [
     rows.map((row) => [
       ...label(row),
       row.runs,
-      fixed(row.bothEndpointsCpuTimeMs, 1),
+      `${fixed(row.bothEndpointsCpuTimeMs, 1)} [${fixed(row.bothEndpointsCpuTimeQ1Ms, 1)}–${fixed(row.bothEndpointsCpuTimeQ3Ms, 1)}]`,
+      fixed(row.bothEndpointsCpuTimeIqrMs, 1),
       fixed(row.bothEndpointsCpuTimeMaxMs, 1),
       row.cpuFlaggedRuns,
       row.runsWithProcessChanges,
@@ -397,7 +433,7 @@ const markdown = [
   "",
   "## Correctness pass: DOM changes per operation",
   "",
-  `n = operations checked per condition (warm-up steps 1–${warmup} and measured steps ${warmup + 1}–${warmup + measured}). Changed labels = labels the oracle expects to change; mutated pills = pills with a MutationObserver record; unchanged pills mutated = DOM writes to pills whose expected label did not change. Steps without label changes are value no-ops (e.g. step 1 sets 0 to 0) or Control steps.`,
+  `n = operations checked per condition (warm-up steps 1–${warmup} and measured steps ${warmup + 1}–${warmup + measured}). Changed labels = labels the oracle expects to change; mutated pills = pills with a MutationObserver record; unchanged pills mutated = DOM writes to pills whose expected label did not change. For deep-leaf, Root Value Updates, and controlled patterns, warm-up step 1 repeats 0 to 0; no measured operation is a value no-op. Control applies no updates, so all of its steps have no label changes.`,
   "",
   markdownTable(
     [
@@ -432,7 +468,12 @@ const supersededDir = path.join(outputDir, "superseded");
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 for (const name of ["summary.md", "summary.csv"]) {
   const existing = path.join(outputDir, name);
-  if (await fs.access(existing).then(() => true, () => false)) {
+  if (
+    await fs.access(existing).then(
+      () => true,
+      () => false,
+    )
+  ) {
     await fs.mkdir(supersededDir, { recursive: true });
     await fs.rename(existing, path.join(supersededDir, `${stamp}-${name}`));
   }

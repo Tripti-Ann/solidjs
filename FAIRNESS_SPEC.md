@@ -141,7 +141,7 @@ Path selection must be deterministic. Any pseudo-random-like path selection must
 - medianMs
 - iqrMs
 - p95Ms
-- opsPerSecond (1000 / meanMs; null when meanMs is 0, i.e. every latency is below the timer resolution)
+- opsPerSecond (1000 / meanMs; null when meanMs is 0, i.e. every recorded latency is exactly zero)
 
 6. After every latency, CPU, trace-window, and heap endpoint of the pass, verify that the rendered node labels match the oracle after the full schedule (Control: the initial tree) and record the result as `domMatchesModel`.
 7. Dispose adapter and remove host.
@@ -161,7 +161,7 @@ Minimum table columns:
 - p95Ms
 - opsPerSecond
 
-Within-run statistics (computed from the 25 measured latencies of one run) and across-run statistics (computed from one value per run) are reported in separate tables. The main descriptive evidence is the run-level median latency: the median of run medians, the nearest-rank Q1–Q3 and IQR of the run medians, and every individual run median in execution order. The within-run table gives medianMs, iqrMs, meanMs, p95Ms, and opsPerSecond, each summarised by the median across runs; opsPerSecond is the reciprocal of the mean synchronous `apply()` latency, a derived statistic and not measured application throughput. Quantiles are nearest-rank (index `ceil(p·n) − 1`); for an even n this is the lower median. No confidence intervals are reported, because runs are dependent repetitions within one browser session. No speedup ratios are computed; values at the timer floor are flagged and zero observations are kept. Every table states its n. Each report records the source commit, working-tree changes (with the tracked diff and untracked files), tool versions, configuration-file hashes, hashes of the served bundle, scenario labels, and the executed condition order.
+Within-run statistics (computed from the 25 measured latencies of one run) and across-run statistics (computed from one value per run) are reported in separate tables. The main descriptive evidence is the run-level median latency: the median of run medians, the nearest-rank Q1–Q3 and IQR of the run medians, and every individual run median in execution order. The within-run table gives medianMs, iqrMs, meanMs, p95Ms, and opsPerSecond, each summarised by the median across runs after it is calculated for each run; opsPerSecond is the reciprocal of the mean synchronous `apply()` latency, a derived statistic and not measured application throughput. Quantiles are nearest-rank (index `ceil(p·n) − 1`); for an even n this is the lower median. No confidence intervals are reported, because runs are dependent repetitions within one browser session. No speedup ratios are computed; values at the timer floor are flagged and zero observations are kept. Every table states its n. Each report records the source commit, working-tree changes (with the tracked diff and untracked files), tool versions, configuration-file hashes, hashes of the served bundle, scenario labels, and the executed condition order.
 
 ## Validity Threats and Guardrails
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyProcessLifecycles,
   describeRuns,
+  describeSpread,
   percentile,
   shuffled,
   summarizeByOperationKind,
@@ -26,6 +27,21 @@ describe("report utilities", () => {
       median: 2,
     });
     expect(describeRuns([undefined]).median).toBeNull();
+  });
+
+  it("adds an across-run IQR that stays empty without values", () => {
+    expect(describeSpread([5, 1, 3, 2, 4])).toMatchObject({
+      median: 3,
+      q1: 2,
+      q3: 4,
+      iqr: 2,
+    });
+    expect(describeSpread([7, null, 7]).iqr).toBe(0);
+    expect(describeSpread([null, undefined])).toMatchObject({
+      n: 0,
+      median: null,
+      iqr: null,
+    });
   });
 
   it("shuffles reproducibly without losing items", () => {
@@ -69,7 +85,13 @@ describe("report utilities", () => {
     tid: 10,
     ts,
   });
-  const complete = (name: string, ts: number, dur: number, pid = 1, tid = 10) => ({
+  const complete = (
+    name: string,
+    ts: number,
+    dur: number,
+    pid = 1,
+    tid = 10,
+  ) => ({
     name,
     ph: "X",
     pid,
@@ -82,7 +104,13 @@ describe("report utilities", () => {
     const summary = summarizeTrace(
       {
         traceEvents: [
-          { ph: "M", name: "thread_name", pid: 1, tid: 10, args: { name: "CrRendererMain" } },
+          {
+            ph: "M",
+            name: "thread_name",
+            pid: 1,
+            tid: 10,
+            args: { name: "CrRendererMain" },
+          },
           mark(marks.start, 1000),
           mark(marks.end, 11000),
           complete("Layout", 0, 2000), // crosses the start: 1000 µs inside
@@ -111,8 +139,15 @@ describe("report utilities", () => {
       rendererMainGcUnionMs: 2,
       rendererMainRenderingOrGcUnionMs: 4.5,
     });
-    expect("inclusiveMsByScope" in summary && summary.inclusiveMsByScope).toEqual({
-      rendererMain: { Layout: 1.5, UpdateLayoutTree: 2, MinorGC: 2, Paint: 0.5 },
+    expect(
+      "inclusiveMsByScope" in summary && summary.inclusiveMsByScope,
+    ).toEqual({
+      rendererMain: {
+        Layout: 1.5,
+        UpdateLayoutTree: 2,
+        MinorGC: 2,
+        Paint: 0.5,
+      },
       rendererOther: { RasterTask: 1 },
       otherProcesses: { Commit: 1 },
     });
@@ -154,14 +189,13 @@ describe("report utilities", () => {
 
     expect(exited.bothEndpointsCpuTimeMs).toBe(500);
     expect(exited.observedProcessesUpperEstimateMs).toBeNull();
-    expect(exited.startOnly).toMatchObject([{ id: 2, cumulativeCpuTimeMs: 2000 }]);
+    expect(exited.startOnly).toMatchObject([
+      { id: 2, cumulativeCpuTimeMs: 2000 },
+    ]);
   });
 
   it("classifies one-sample processes using the session's other samples", () => {
-    const sample = (
-      start: Array<{ id: number }>,
-      end: Array<{ id: number }>,
-    ) =>
+    const sample = (start: Array<{ id: number }>, end: Array<{ id: number }>) =>
       summarizeProcessCpuTime(
         start.map(({ id }) => ({ id, type: "utility", cpuTime: 1 })),
         end.map(({ id }) => ({ id, type: "utility", cpuTime: 2 })),

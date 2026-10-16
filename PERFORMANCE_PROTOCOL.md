@@ -113,7 +113,7 @@ The automated Chrome runner reloads the page before every condition. It forces a
 
 Work outside the update-latency window:
 
-- Update latency times `apply()` synchronously and back-to-back, so style recalculation, layout, paint, and deferred garbage collection are not included.
+- Update latency brackets each synchronous `apply()` call and proceeds back-to-back. It does not wait for deferred rendering, layout, paint, or garbage collection, although any synchronous work that `apply()` performs remains included.
 - `TaskDuration` and the summed captured `apply()` latency (`tracedApplyTotalMs`) cover different windows and kinds of time (main-thread task time between Node-side CDP samples versus wall time inside `apply()`), so their difference cannot isolate work outside `apply()`. Protocol 3 reports them side by side and computes no difference (`nonApplyTaskDurationMs` and "above Control" were removed).
 - The Control condition shows the harness floor for the same markup; compare it descriptively, not by subtraction.
 - `scriptDurationMs` was dropped in protocol 2: the CDP `ScriptDuration` delta was 0.2–2.5 ms where the traced `apply()` total was up to about 650 ms, so it did not capture the timed work.
@@ -121,7 +121,7 @@ Work outside the update-latency window:
 
 Timer resolution:
 
-- `environment.timerResolutionMs` records the smallest observed `performance.now()` step (5 µs when cross-origin isolated). Latencies at or below it are reported as below the effective timer resolution, not as zero (`atOrBelowTimerResolutionCount`).
+- `environment.timerResolutionMs` records the smallest observed `performance.now()` step (5 µs when cross-origin isolated). Latencies at or below it are reported as at the effective timer floor, not as zero (`atOrBelowTimerResolutionCount`); exact-zero observations are counted separately.
 - `npm run report` flags rows with any measured latency at or below the resolution (°) and rows where more than 10% are (†). † rows are quantised to timer ticks and must not be used for precise comparisons or ratios.
 
 For each metric:
