@@ -96,18 +96,11 @@ export interface CorrectnessResult {
   steps: CorrectnessStep[];
 }
 
-function inspectDom(
-  host: HTMLElement,
-  levels: number[],
-  previous: string[],
-  expected: string[],
+function attributeMutationsToPills(
   records: MutationRecord[],
-  step: number,
-  kind: CorrectnessStep["kind"],
-  pathDepth: number | null,
-): CorrectnessStep {
-  const pills = [...host.querySelectorAll(".node-pill")];
-  const nodes = [...host.querySelectorAll<HTMLElement>(".tree-node")];
+  pills: Element[],
+): { mutated: Set<number>; mutationsOutsidePills: number } {
+  // Attribute each observer record to its containing label; these diagnostics do not decide pass/fail.
   const pillIndex = new Map(pills.map((pill, index) => [pill, index]));
   const mutated = new Set<number>();
   let mutationsOutsidePills = 0;
@@ -125,6 +118,26 @@ function inspectDom(
       mutated.add(index);
     }
   }
+
+  return { mutated, mutationsOutsidePills };
+}
+
+function inspectDom(
+  host: HTMLElement,
+  levels: number[],
+  previous: string[],
+  expected: string[],
+  records: MutationRecord[],
+  step: number,
+  kind: CorrectnessStep["kind"],
+  pathDepth: number | null,
+): CorrectnessStep {
+  const pills = [...host.querySelectorAll(".node-pill")];
+  const nodes = [...host.querySelectorAll<HTMLElement>(".tree-node")];
+  const { mutated, mutationsOutsidePills } = attributeMutationsToPills(
+    records,
+    pills,
+  );
 
   const mismatch = expected.findIndex(
     (label, index) => pills[index]?.textContent !== label,
@@ -173,6 +186,7 @@ export function verifyScenario(
   const oracle = createOracle(root);
   const appliesUpdates = adapter.framework !== "Control";
   const observer = new MutationObserver(() => {});
+  // apply() must finish DOM work synchronously for this benchmark; records are drained per operation.
   observer.observe(host, {
     subtree: true,
     childList: true,

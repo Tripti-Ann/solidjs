@@ -48,7 +48,7 @@ Each scenario has a fixed tree shape (depth × breadth).
 - React baseline: straightforward recursive rendering
 - React optimized: `React.memo`, `useMemo`, and `useCallback`
 - Solid baseline: single-root signal with immutable tree updates, rendered through `<Index>`
-- Solid optimized: decomposed node-level signals with `createMemo`; subtree operations update all node signals inside one `batch()`, so each operation propagates once
+- Solid optimized: decomposed node-level signals with `createMemo`; its child structure is fixed after mount and rendered by direct mapping, while subtree operations update node signals inside one `batch()`, so each operation propagates once
 - Control (Chrome runner only): the same markup rendered with plain DOM that ignores every update; it measures the harness overhead floor
 
 ## Scripts
@@ -67,7 +67,7 @@ This project includes `bench/chrome-metrics.mjs`, a Puppeteer-based runner that 
 
 - In-app benchmark aggregates (median, IQR, mean, p95, ops/s) per suite run, plus the distribution of per-run medians across runs
 - Raw operation records of both passes (`rawMeasurements` primary, `capturedRawMeasurements` traced)
-- A correctness pass in a separate browser launch: every rendered label and the tree structure checked after each `apply()` against an independent oracle, before any measurement
+- A correctness pass in a separate browser launch: every rendered label and the tree structure checked after each `apply()` against an independent oracle, before any measurement; MutationObserver counts are reported as DOM-write diagnostics and do not determine correctness
 - A final-state DOM check per measured pass (`domMatchesModel`), after all of its measurement endpoints
 - Provenance: git commit, `git status` entries, tracked diff (`source.patch`), untracked files (copied and hashed), tool versions, configuration-file hashes, and hashes of the served bundle
 - Condition-level CDP `TaskDuration` delta and the summed captured `apply()` latency, reported side by side

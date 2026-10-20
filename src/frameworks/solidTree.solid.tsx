@@ -52,6 +52,7 @@ function SolidReactiveTreeNode(props: {
       <div class="node-pill">{label()}</div>
       {props.node.children.length > 0 ? (
         <div class="node-children">
+          {/* Children never change after mount; direct mapping avoids list reconciliation work. */}
           {props.node.children.map((child) => (
             <SolidReactiveTreeNode node={child} level={props.level + 1} />
           ))}

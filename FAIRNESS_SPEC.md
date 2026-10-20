@@ -123,7 +123,7 @@ Path selection must be deterministic. Any pseudo-random-like path selection must
 
 ## Measurement Protocol
 
-0. Correctness pass (before any measurement, separate browser launch with the same served bundle and browser flags): for every condition, mount the initial tree in an offscreen host and, after each `apply()` returns and before yielding, compare every rendered label and the tree-node level sequence with an oracle that does not use the adapters' update helpers. Any failure stops the experiment before measurements.
+0. Correctness pass (before any measurement, separate browser launch with the same served bundle and browser flags): for every condition, mount the initial tree in an offscreen host and, after each `apply()` returns and before yielding, compare every rendered label and the tree-node level sequence with an oracle that does not use the adapters' update helpers. MutationObserver counts may be retained as diagnostics, but only label or structure mismatches fail correctness. Any failure stops the experiment before measurements.
 1. Build scenario tree.
 2. Mount adapter.
 3. Execute warmup operations.

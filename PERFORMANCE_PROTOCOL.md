@@ -63,7 +63,7 @@ Record these details in the thesis appendix.
 
 ## 5. Correctness Pass
 
-Before measuring, the runner launches a separate Chrome instance with the same flags and served bundle. For every condition it loads the page, mounts the initial tree in a `bench-host`, and after each of the 30 `apply()` calls (before yielding) compares every rendered label and the tree-node level sequence with an oracle that keeps expected values by node id and does not use `tree.ts` update helpers. A MutationObserver records which pills each operation mutated. If any condition fails, no measurements are taken. Each measured pass additionally checks the final labels after all of its measurement endpoints (`domMatchesModel`).
+Before measuring, the runner launches a separate Chrome instance with the same flags and served bundle. For every condition it loads the page, mounts the initial tree in a `bench-host`, and after each of the 30 `apply()` calls (before yielding) compares every rendered label and the tree-node level sequence with an oracle that keeps expected values by node id and does not use `tree.ts` update helpers. A MutationObserver records which pills each operation mutated as diagnostic evidence of DOM writes; only label and structure mismatches fail correctness. If any condition fails, no measurements are taken. Each measured pass additionally checks the final labels after all of its measurement endpoints (`domMatchesModel`).
 
 ## 6. Browser UI
 
